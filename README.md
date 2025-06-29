@@ -13,7 +13,7 @@ The analysis is organized into the following R Markdown files:
 3. Volcano Plots Expression.Rmd:
   Generates volcano plots to visualize differential gene expression (log2 fold change vs. adjusted p-value) across conditions.
 
-4.Enrichment Analysis.Rmd:
+4. Enrichment Analysis.Rmd:
   Runs Gene Ontology (GO) and/or Reactome enrichment analysis based on DE genes, using the clusterProfiler package.
 
 5. PCA for DMRs.Rmd:
