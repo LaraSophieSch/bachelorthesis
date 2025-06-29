@@ -28,3 +28,17 @@ The analysis is organized into the following R Markdown files:
 8. Treatments with Volcano and Fisher.Rmd:
   Investigates gene correlations with treatment response and overlaps with DE genes using Fisher’s Exact Test. Visualizes treatment-relevant gene sets via volcano plots.
 
+# Dependencies
+Key R packages used in this project:
+
+- DESeq2
+
+- ggplot2, EnhancedVolcano
+
+- clusterProfiler, org.Hs.eg.db
+
+- pheatmap, ComplexHeatmap
+
+- GenomicRanges, rtracklayer
+
+- tidyverse, dplyr, tibble
