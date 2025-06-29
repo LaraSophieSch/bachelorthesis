@@ -1,0 +1,163 @@
+---
+title: "Methylation"
+author: "lara"
+date: "2024-12-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(plyranges)
+library(GenomicRanges)
+library(ChIPseeker)
+
+
+```
+
+## Read-in data
+
+```{r project load data}
+all.genes.gr <- readRDS("/home/lakatos/aboemmel/genomes/GRCh38/all.genes.ensembl.102.chrsizes.granges.rds")
+all.genes.gr.df <- as.data.frame(all.genes.gr)
+
+significantGenes.kmt <- readRDS("/misc/pichu/data/lara/objects/significantGenes_kmt.rds") %>%
+  tibble::rownames_to_column("ENSEMBL")
+significantGenes.bcr <- readRDS("/misc/pichu/data/lara/objects/significantGenes_bcr.rds") %>%
+  tibble::rownames_to_column("ENSEMBL")
+
+significantGenes.bcr.df <- as.data.frame(significantGenes.bcr)
+significantGenes.kmt.df <- as.data.frame(significantGenes.kmt)
+
+upregulatedGenes.bcr <- readRDS("/misc/pichu/data/lara/objects/upregulatedGenes_bcr.rds") %>%
+  tibble::rownames_to_column("ENSEMBL")
+upregulatedGenes.kmt <- readRDS("/misc/pichu/data/lara/objects/upregulatedGenes_kmt.rds")%>%
+  tibble::rownames_to_column("ENSEMBL")
+downregulatedGenes.bcr <- readRDS("/misc/pichu/data/lara/objects/downregulatedGenes_bcr.rds")%>%
+  tibble::rownames_to_column("ENSEMBL")
+downregulatedGenes.kmt <- readRDS("/misc/pichu/data/lara/objects/downregulatedGenes_kmt.rds")%>%
+  tibble::rownames_to_column("ENSEMBL")
+
+upregulatedGenes.bcr.df <- as.data.frame(upregulatedGenes.bcr)
+upregulatedGenes.kmt.df <- as.data.frame(upregulatedGenes.kmt)
+downregulatedGenes.bcr.df <- as.data.frame(downregulatedGenes.bcr)
+downregulatedGenes.kmt.df <- as.data.frame(downregulatedGenes.kmt)
+
+methylatedRegions.bcr <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/WGBS/metilene/segemehl/haarz/BCR_diagnosed-vs-BCR_relapsed/dmr.tsv")
+methylatedRegions.kmt <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/WGBS/metilene/segemehl/haarz/KMT_diagnosed-vs-KMT_relapsed/dmr.tsv")
+
+
+```
+
+## Create Genomic Ranges for methylated Regions
+
+```{r project DNA-methylation}
+
+# Genomic Ranges Object
+
+methylatedRegions.bcr.gr <- makeGRangesFromDataFrame(methylatedRegions.bcr,
+                                   keep.extra.columns = TRUE)
+methylatedRegions.kmt.gr <- makeGRangesFromDataFrame(methylatedRegions.kmt,
+                                   keep.extra.columns = TRUE)
+
+# Into Dataframe
+methylatedRegions.bcr.gr.df <- as.data.frame(methylatedRegions.bcr.gr)
+methylatedRegions.kmt.gr.df <- as.data.frame(methylatedRegions.kmt.gr )
+
+
+```
+
+## Find diff. exp. (significant) genes that also have a diff. methylated region in promoter -> peakAnno
+
+```{r project Genomic Annotation by barplot - plotAnnoBar}
+
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene # important to use hg38
+
+peakAnno.bcr <- annotatePeak(methylatedRegions.bcr.gr, 
+                         tssRegion = c(-3000, 3000), 
+                         TxDb = txdb, annoDb = "org.Hs.eg.db")
+peakAnno.kmt <- annotatePeak(methylatedRegions.kmt.gr, 
+                         tssRegion = c(-3000, 3000), 
+                         TxDb = txdb, annoDb = "org.Hs.eg.db")
+
+plotAnnoBar(peakAnno.bcr)
+plotAnnoBar(peakAnno.kmt)
+
+```
+
+```{r project Get results from peakAnno}
+
+peakAnno.bcr.df <- as.data.frame(peakAnno.bcr)
+peakAnno.kmt.df <- as.data.frame(peakAnno.kmt)
+
+promoter_peaks.bcr <- peakAnno.bcr.df[grepl("^Promoter", peakAnno.bcr.df$annotation), ]
+promoter_peaks.kmt <- peakAnno.kmt.df[grepl("^Promoter", peakAnno.kmt.df$annotation), ]
+
+# Get all significant diff. expr. ENSEMBL-IDs from peak data (that have methylated region in promoter)
+filtered_peakIDs.bcr <- promoter_peaks.bcr %>%
+  filter(ENSEMBL %in% significantGenes.bcr.df$ENSEMBL)
+filtered_peakIDs.kmt <- promoter_peaks.kmt %>%
+  filter(ENSEMBL %in% significantGenes.kmt.df$ENSEMBL)
+
+# Save results
+saveRDS(filtered_peakIDs.bcr, file = "/misc/pichu/data/lara/objects/methylated/methylatedPromoter_significantGenes_bcr.rds")
+saveRDS(filtered_peakIDs.kmt, file = "/misc/pichu/data/lara/objects/methylated/methylatedPromoter_significantGenes_kmt.rds")
+
+# Filter up- and downregulated genes
+filtered_upregulated_peakIDs.bcr <- filtered_peakIDs.bcr %>%
+  filter(ENSEMBL %in% upregulatedGenes.bcr.df$ENSEMBL)
+filtered_upregulated_peakIDs.kmt <- filtered_peakIDs.kmt %>%
+  filter(ENSEMBL %in% upregulatedGenes.kmt.df$ENSEMBL)
+
+filtered_downregulated_peakIDs.bcr <- filtered_peakIDs.bcr %>%
+  filter(ENSEMBL %in% downregulatedGenes.bcr.df$ENSEMBL)
+filtered_downregulated_peakIDs.kmt <- filtered_peakIDs.kmt %>%
+  filter(ENSEMBL %in% downregulatedGenes.kmt.df$ENSEMBL)
+
+
+# Filter only the methylated regions in promoters
+upregulated_genes_promoters_peakIDs.bcr<- filtered_upregulated_peakIDs.bcr %>%
+  filter(grepl("Promoter", annotation)) # 3 results
+upregulated_genes_promoters_peakIDs.kmt<- filtered_upregulated_peakIDs.kmt %>%
+  filter(grepl("Promoter", annotation)) # 26 results
+downregulated_genes_promoters_peakIDs.bcr<- filtered_downregulated_peakIDs.bcr %>%
+  filter(grepl("Promoter", annotation)) # 10 results
+downregulated_genes_promoters_peakIDs.kmt<- filtered_downregulated_peakIDs.kmt %>%
+  filter(grepl("Promoter", annotation)) # 6 results
+
+# Save results
+
+saveRDS(upregulated_genes_promoters_peakIDs.bcr, file = "/misc/pichu/data/lara/objects/methylated/methylatedPromoter_upregulatedGene.bcr")
+saveRDS(upregulated_genes_promoters_peakIDs.kmt, file = "/misc/pichu/data/lara/objects/methylated/methylatedPromoter_upregulatedGene.kmt")
+saveRDS(downregulated_genes_promoters_peakIDs.bcr, file = "/misc/pichu/data/lara/objects/methylated/methylatedPromoter_downregulatedGene.bcr")
+saveRDS(downregulated_genes_promoters_peakIDs.kmt, file = "/misc/pichu/data/lara/objects/methylated/methylatedPromoter_downregulatedGene.kmt")
+
+# Get gene IDs
+list_peak_upregulated_geneIDs.bcr <- upregulated_genes_promoters_peakIDs.bcr$ENSEMBL
+list_peak_upregulated_geneIDs.kmt <- upregulated_genes_promoters_peakIDs.kmt$ENSEMBL
+list_peak_downregulated_geneIDs.bcr <- downregulated_genes_promoters_peakIDs.bcr$ENSEMBL
+list_peak_downregulated_geneIDs.kmt <- downregulated_genes_promoters_peakIDs.kmt$ENSEMBL
+
+
+# Convert into gene names
+conversion_peak_upregulated_genenames.bcr <- bitr(list_peak_upregulated_geneIDs.bcr, fromType = "ENSEMBL",
+        toType = "SYMBOL",
+        OrgDb = org.Hs.eg.db)
+# CEBPA, NPAS2, TM4SF1
+
+conversion_peak_upregulated_genenames.kmt <- bitr(list_peak_upregulated_geneIDs.kmt, fromType = "ENSEMBL",
+        toType = "SYMBOL",
+        OrgDb = org.Hs.eg.db)
+# ERMAP, NFIA, ZNF503, SLC25A21, LGALS3, CES1, FECH, PRDX2, NFIX, FUT1, ADD2, TET3, ERFE, ITGB2, 	NFAM1, 	MIRLET7BHG,	KLF3,	FAT1, KCNK5, TFR2, TUSC1, ALAD, DAB2IP, UBAC1
+
+conversion_peak_downregulated_genenames.bcr <- bitr(list_peak_downregulated_geneIDs.bcr, fromType = "ENSEMBL",
+        toType = "SYMBOL",
+        OrgDb = org.Hs.eg.db)
+# CHRM3, ANO2, CLEC14A, ZNF667, BMPR1B, SNAP91, SGCE
+
+conversion_peak_downregulated_genenames.kmt <- bitr(list_peak_downregulated_geneIDs.kmt, fromType = "ENSEMBL",
+        toType = "SYMBOL",
+        OrgDb = org.Hs.eg.db)
+#	DNTT, DNASE1, TRPM2, CYTH4, LINC02363, FLT4
+```
+
+

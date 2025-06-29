@@ -1,0 +1,339 @@
+---
+title: "Enrichment Analysis"
+output: html_document
+---
+
+```{r Read in}
+sig.bcr <- readRDS("/misc/pichu/data/lara/objects/significantGenes_bcr.rds")
+sig.kmt <- readRDS("/misc/pichu/data/lara/objects/significantGenes_kmt.rds")
+
+upGenes.bcr <- readRDS("/misc/pichu/data/lara/objects/upregulatedGenes_bcr.rds")
+downGenes.bcr<- readRDS("/misc/pichu/data/lara/objects/downregulatedGenes_bcr.rds")
+upGenes.kmt <- readRDS("/misc/pichu/data/lara/objects/upregulatedGenes_kmt.rds")
+downGenes.kmt<- readRDS("/misc/pichu/data/lara/objects/downregulatedGenes_kmt.rds")
+```
+
+```{r}
+ids.bcr <- data.frame(ENSEMBL = rownames(sig.bcr))
+ids.kmt <- data.frame(ENSEMBL = rownames(sig.kmt))
+
+```
+
+# GO Enrichment Analysis
+
+
+```{r project enrichment analysis}
+
+
+ego.bcr <- enrichGO(gene     = ids.bcr$ENSEMBL,
+                  OrgDb         = org.Hs.eg.db,
+                  keyType       = 'ENSEMBL',
+                  ont           = "BP", 
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.01,
+                  qvalueCutoff  = 0.05,
+                  readable = TRUE)
+
+ego.kmt <- enrichGO(gene     = ids.kmt$ENSEMBL,
+                  OrgDb         = org.Hs.eg.db,
+                  keyType       = 'ENSEMBL',
+                  ont           = "BP", 
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.01,
+                  qvalueCutoff  = 0.05,
+                  readable = TRUE)
+
+
+# IDs of filtered log2foldchange Genes
+ids.poslog.bcr <- data.frame(ENSEMBL = rownames(upGenes.bcr))
+ids.neglog.bcr <- data.frame(ENSEMBL = rownames(downGenes.bcr))
+ids.poslog.kmt <- data.frame(ENSEMBL = rownames(upGenes.kmt))
+ids.neglog.kmt <- data.frame(ENSEMBL = rownames(downGenes.kmt))
+
+ego.poslog.bcr <- enrichGO(gene     = ids.poslog.bcr$ENSEMBL,
+                  OrgDb         = org.Hs.eg.db,
+                  keyType       = 'ENSEMBL',
+                  ont           = "BP", 
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.01,
+                  qvalueCutoff  = 0.05,
+                  readable = TRUE)
+
+ego.poslog.kmt <- enrichGO(gene     = ids.poslog.kmt$ENSEMBL,
+                  OrgDb         = org.Hs.eg.db,
+                  keyType       = 'ENSEMBL',
+                  ont           = "BP", 
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.01,
+                  qvalueCutoff  = 0.05,
+                  readable = TRUE)
+# doesn't work
+ego.neglog.bcr <- enrichGO(gene     = ids.neglog.bcr$ENSEMBL,
+                  OrgDb         = org.Hs.eg.db,
+                  keyType       = 'ENSEMBL',
+                  ont           = "BP", 
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.01,
+                  qvalueCutoff  = 0.05,
+                  readable = TRUE)
+
+# doesn't work 
+ego.neglog.kmt <- enrichGO(gene     = ids.neglog.kmt$ENSEMBL,
+                  OrgDb         = org.Hs.eg.db,
+                  keyType       = 'ENSEMBL',
+                  ont           = "BP", 
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.01,
+                  qvalueCutoff  = 0.05,
+                  readable = TRUE)
+
+#Molecular function--------------------------------------------------------
+ego.bcr2 <- enrichGO(gene     = ids.bcr$ENSEMBL,
+                  OrgDb         = org.Hs.eg.db,
+                  keyType       = 'ENSEMBL',
+                  ont           = "MF", 
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.01,
+                  qvalueCutoff  = 0.05,
+                  readable = TRUE)
+
+cnetplot(ego.bcr2)
+ggsave("/misc/pichu/data/lara/figures/CNETPlot_MF_BCR.pdf", width = 8, height = 5)
+```
+# Plots GO Enrichment Analysis
+
+```{r project plot enrichtment analysis}
+# For downregulated genes no results
+
+dotplot(ego.poslog.bcr)
+goplot(ego.poslog.bcr)
+cnetplot(ego.poslog.bcr) +
+  ggplot2::ggtitle("GO Enrichment Analysis for Upregulated Genes in BCR") +
+  theme(
+   plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+   legend.text = element_text(size = 15),
+   legend.title = element_text(size = 13),
+  )
+ggsave("/misc/pichu/data/lara/figures/CNETPlot_upregulated_BCR.pdf", width = 6, height = 5)
+
+cnetplot(ego.poslog.kmt) +
+  ggplot2::ggtitle("GO Enrichment Analysis for Upregulated Genes in KMT") +
+  theme(
+   plot.title = element_text(hjust = 0.5, size = 20, face = "bold"),
+   legend.text = element_text(size = 15),
+   legend.title = element_text(size = 13),
+  )
+ggsave("/misc/pichu/data/lara/figures/CNETPlot_upregulated_KMT.pdf", width = 10, height = 8)
+
+```
+
+# Reactome Enrichment Analysis with up- and downregulated Genes
+
+```{r project reactome enrichment analysis}
+
+#Ensembl IDs to Entrezid IDs from the significant genes----
+
+# Filter and add Column name
+
+valid_ids <- keys(org.Hs.eg.db, keytype = "ENSEMBL")
+
+poslogFiltered.bcr <- poslog.bcr[rownames(poslog.bcr) %in% valid_ids,] %>%
+  tibble::rownames_to_column("ENSEMBL")
+
+poslogFiltered.kmt <- poslog.kmt[rownames(poslog.kmt) %in% valid_ids,] %>%
+  tibble::rownames_to_column("ENSEMBL")
+
+neglogFiltered.bcr <- neglog.bcr[rownames(neglog.bcr) %in% valid_ids,] %>%
+  tibble::rownames_to_column("ENSEMBL")
+
+neglogFiltered.kmt <- neglog.kmt[rownames(neglog.kmt) %in% valid_ids,] %>%
+  tibble::rownames_to_column("ENSEMBL")
+
+# Check
+
+poslogFiltered.bcr$ENSEMBL %in% keys(org.Hs.eg.db, keytype = "ENSEMBL")
+poslogFiltered.kmt$ENSEMBL %in% keys(org.Hs.eg.db, keytype = "ENSEMBL")
+neglogFiltered.bcr$ENSEMBL %in% keys(org.Hs.eg.db, keytype = "ENSEMBL")
+neglogFiltered.kmt$ENSEMBL %in% keys(org.Hs.eg.db, keytype = "ENSEMBL")
+
+# Biological Translator
+
+entrezid.poslog.bcr<- bitr(poslogFiltered.bcr$ENSEMBL, fromType = "ENSEMBL",
+        toType = "ENTREZID",
+        OrgDb = org.Hs.eg.db)
+
+entrezid.poslog.kmt<- bitr(poslogFiltered.kmt$ENSEMBL, fromType = "ENSEMBL",
+        toType = "ENTREZID",
+        OrgDb = org.Hs.eg.db)
+
+entrezid.neglog.bcr<- bitr(neglogFiltered.bcr$ENSEMBL, fromType = "ENSEMBL",
+        toType = "ENTREZID",
+        OrgDb = org.Hs.eg.db)
+
+entrezid.neglog.kmt<- bitr(neglogFiltered.kmt$ENSEMBL, fromType = "ENSEMBL",
+        toType = "ENTREZID",
+        OrgDb = org.Hs.eg.db)
+
+# Duplicates in the ENS-IDs in KMT Samples
+entrezid.poslog.bcr$log2FoldChange <- poslogFiltered.bcr$log2FoldChange[match(entrezid.poslog.bcr$ENSEMBL, poslogFiltered.bcr$ENSEMBL)]
+entrezid.poslog.kmt$log2FoldChange <- poslogFiltered.kmt$log2FoldChange[match(entrezid.poslog.kmt$ENSEMBL, poslogFiltered.kmt$ENSEMBL)] 
+entrezid.neglog.bcr$log2FoldChange <- neglogFiltered.bcr$log2FoldChange[match(entrezid.neglog.bcr$ENSEMBL, neglogFiltered.bcr$ENSEMBL)] 
+entrezid.neglog.kmt$log2FoldChange <- neglogFiltered.kmt$log2FoldChange[match(entrezid.neglog.kmt$ENSEMBL, neglogFiltered.kmt$ENSEMBL)] 
+
+#Create geneList with Entrezids = log2foldchange----
+
+geneList.poslog.bcr <- setNames(
+  entrezid.poslog.bcr$log2FoldChange,
+  entrezid.poslog.bcr$ENTREZID
+)
+
+geneList.poslog.kmt <- setNames(
+  entrezid.poslog.kmt$log2FoldChange,
+  entrezid.poslog.kmt$ENTREZID
+)
+
+geneList.neglog.bcr <- setNames(
+  entrezid.neglog.bcr$log2FoldChange,
+  entrezid.neglog.bcr$ENTREZID
+)
+
+geneList.neglog.kmt <- setNames(
+  entrezid.neglog.kmt$log2FoldChange,
+  entrezid.neglog.kmt$ENTREZID
+)
+
+#Reactome enrichment analysis----
+
+data(geneList.poslog.bcr, package="DOSE")
+de.poslog.bcr <- names(geneList.poslog.bcr)[abs(geneList.poslog.bcr) > 0.05]
+rea.poslog.bcr <- enrichPathway(gene=de.poslog.bcr, pvalueCutoff = 0.05, readable=TRUE)
+
+data(geneList.poslog.kmt, package="DOSE")
+de.poslog.kmt <- names(geneList.poslog.kmt)[abs(geneList.poslog.kmt) > 0.05]
+rea.poslog.kmt <- enrichPathway(gene=de.poslog.kmt, pvalueCutoff = 0.05, readable=TRUE)
+
+data(geneList.neglog.bcr, package="DOSE")
+de.neglog.bcr <- names(geneList.neglog.bcr)[abs(geneList.neglog.bcr) > 0.05]
+rea.neglog.bcr <- enrichPathway(gene=de.neglog.bcr, pvalueCutoff = 0.05, readable=TRUE)
+
+data(geneList.neglog.kmt, package="DOSE")
+de.neglog.kmt <- names(geneList.neglog.kmt)[abs(geneList.neglog.kmt) > 0.05]
+rea.neglog.kmt <- enrichPathway(gene=de.neglog.kmt, pvalueCutoff = 0.05, readable=TRUE)
+
+
+```
+
+# Plots Reactome Enrichment Analysis
+
+```{r project plots reactome enrichment analysis}
+
+barplot(rea.poslog.bcr, showCategory = 10, title = "Top Enriched Reactome Pathways for Upregulated Genes in BCR")
+barplot(rea.poslog.kmt, showCategory = 10, title = "Top Enriched Reactome Pathways for Upregulated Genes in KMT")
+barplot(rea.neglog.bcr, showCategory = 10, title = "Top Enriched Reactome Pathways for Downregulated Genes in BCR")
+barplot(rea.neglog.kmt, showCategory = 10, title = "Top Enriched Reactome Pathways for Downregulated Genes in KMT") # length zero
+
+cnetplot(rea.poslog.bcr, showCategory = 5, circular = TRUE, colorEdge = TRUE) + ggplot2::ggtitle("Top Enriched Reactome Pathways for Upregulated Genes in BCR")
+cnetplot(rea.poslog.kmt, showCategory = 5, circular = TRUE, colorEdge = TRUE) + ggplot2::ggtitle("Top Enriched Reactome Pathways for Upregulated Genes in KMT")
+cnetplot(rea.neglog.bcr, showCategory = 5, circular = TRUE, colorEdge = TRUE) + ggplot2::ggtitle("Top Enriched Reactome Pathways for Downregulated Genes in BCR")
+cnetplot(rea.neglog.kmt, showCategory = 5, circular = TRUE, colorEdge = TRUE) + ggplot2::ggtitle("Top Enriched Reactome Pathways for Downregulated Genes in KMT") # zero
+
+```
+
+# Overlap between diff. expressed Genes in BCR and KMT
+
+```{r project find overlaps}
+
+poslog.bcr <- tibble::rownames_to_column(poslog.bcr,"ENSEMBL")
+poslog.kmt <- tibble::rownames_to_column(poslog.kmt,"ENSEMBL")
+neglog.bcr <- tibble::rownames_to_column(neglog.bcr,"ENSEMBL")
+neglog.kmt <- tibble::rownames_to_column(neglog.kmt,"ENSEMBL")
+
+overlap_upregulated_genes <- intersect(poslog.bcr$ENSEMBL, poslog.kmt$ENSEMBL)
+overlap_downregulated_genes <- intersect(neglog.bcr$ENSEMBL, neglog.kmt$ENSEMBL)
+
+length(overlap_upregulated_genes) # = 3. "ENSG00000231419" "ENSG00000182704" "ENSG00000173918"
+length(overlap_downregulated_genes) # = 7. "ENSG00000210082" "ENSG00000207008" "ENSG00000207392" "ENSG00000234093" "ENSG00000231369" "ENSG00000213939" "ENSG00000227034"
+
+# Get IDs from upregulated Genes as Input for STRING 
+
+cat(poslog.kmt$ENSEMBL, sep = "\n")
+cat(poslog.kmt$ENSEMBL, sep = "\n")
+```
+
+# Change log2foldchange and padj for KMT, so it fits for STRING 
+
+```{r project change log and padj for KMT}
+padjChanged.kmt <- resOrdered.kmt %>%
+  dplyr::filter(padj < 0.05)
+
+poslogChanged.kmt <- padjChanged.kmt %>%
+  dplyr::filter(log2FoldChange > 4.8)
+neglogChanged.kmt <- padjChanged.kmt %>%
+  dplyr::filter(log2FoldChange < -0.5)
+
+poslogChanged.kmt <- tibble::rownames_to_column(poslogChanged.kmt,"ENSEMBL")
+cat(poslogChanged.kmt$ENSEMBL, sep = "\n")
+
+# Get IDs from genes as Input for String
+```
+
+# Overlap between BCR and KMT with one DDS-object
+
+```{r project one dds object for kmt and bcr to study overlaps}
+
+# Create meta data table with BCR and KMT as well as diagnosis and relapsed
+metaBoth <- rbind(meta.bcr, meta.kmt)
+
+# Create counts table
+countsBoth <- merge(counts.bcr, counts.kmt, by = "row.names", all = TRUE)
+rownames(countsBoth) <- countsBoth$Row.names
+countsBoth <- countsBoth[,-1]
+
+# Create DDS Object
+ddsBoth <- DESeqDataSetFromMatrix(countData = countsBoth,
+                                  colData = metaBoth,
+                                  design = ~ condition + Relapsed)
+# Prefiltering low counts
+smallestGroupSize <- 2
+keep <- rowSums(counts(ddsBoth) >= 10) >= smallestGroupSize
+ddsBoth <- ddsBoth[keep,]
+
+# DeSeq2
+ddsBoth <- DESeq(ddsBoth)
+saveRDS(ddsBoth, file = "/misc/pichu/data/lara/objects/dds/dds_kmt_bcr.rds")
+resBoth <- results(ddsBoth)
+
+# How to get information about relapsed vs diagnosis
+
+# Order p-values
+resBothOrdered <- resBoth[order(resBoth$pvalue),]
+
+# Get Summary
+summary(resBoth)
+
+# Create Data Frame
+resBothOrdered.df <- as.data.frame(resBothOrdered)
+
+# Plot
+plotCounts(ddsBoth, gene=which.min(resBoth.df$padj), intgroup="Relapsed")
+
+# Filtering
+padjBoth <- resBothOrdered.df %>%
+  dplyr::filter(padj < 0.05)
+saveRDS(padjBoth, file = "/misc/pichu/data/lara/objects/significantGenes_kmt&bcr.rds")
+
+poslogBoth <- padjBoth %>%
+  dplyr::filter(log2FoldChange > 5)
+
+neglogBoth <- padjBoth %>%
+  dplyr::filter(log2FoldChange < -5)
+
+# Get upregulated and downregulated Gene IDs 
+poslogBoth <- tibble::rownames_to_column(poslogBoth,"ENSEMBL")
+neglogBoth <- tibble::rownames_to_column(neglogBoth,"ENSEMBL")
+
+cat(poslogBoth$ENSEMBL, sep = "\n") # used for STRING
+length(poslogBoth$ENSEMBL)
+
+cat(neglogBoth$ENSEMBL, sep = "\n")
+length(neglogBoth$ENSEMBL)

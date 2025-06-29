@@ -1,0 +1,468 @@
+---
+title: "HeatMaps"
+author: "lara"
+date: "2025-01-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(DESeq2)
+library(ggplot2)
+library(ComplexHeatmap)
+library("org.Hs.eg.db")
+library(GenomicRanges)
+library(circlize)
+library(dplyr)
+```
+
+## Read-in data
+
+```{r Load data}
+
+cpg_data.bcr <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/WGBS/metilene/segemehl/haarz/BCR_diagnosed-vs-BCR_relapsed/merates.bedg")
+cpg_data.kmt <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/WGBS/metilene/segemehl/haarz/KMT_diagnosed-vs-KMT_relapsed/merates.bedg")
+
+significantGenes.bcr <- readRDS("/misc/pichu/data/lara/objects/significantGenes_bcr.rds")
+significantGenes.kmt <- readRDS("/misc/pichu/data/lara/objects/significantGenes_kmt.rds")
+significantGenes.both <- readRDS("/misc/pichu/data/lara/objects/significantGenes_kmt&bcr.rds")
+
+dds.bcr <- readRDS("/misc/pichu/data/lara/objects/dds/dds.bcr.rds")
+dds.kmt <- readRDS("/misc/pichu/data/lara/objects/dds/dds.kmt.rds")
+dds.both <- readRDS("/misc/pichu/data/lara/objects/dds/dds_kmt_bcr.rds")
+
+methylated_significantGenes_ranges.bcr <- readRDS("/misc/pichu/data/lara/objects/methylated/methylated_signficantGenes.bcr") %>%
+  { colnames(.)[1] <- "chr"; . }
+methylated_significantGenes_ranges.kmt <- readRDS("/misc/pichu/data/lara/objects/methylated/methylated_signficantGenes.kmt") %>%
+  { colnames(.)[1] <- "chr"; . }
+
+# Methylated Promoter
+methylatedPromoter_significantGenes_ranges.bcr <- readRDS("/misc/pichu/data/lara/objects/methylated/methylatedPromoter_significantGenes_bcr.rds") %>%
+  { colnames(.)[1] <- "chr"; . }
+methylatedPromoter_significantGenes_ranges.kmt <- readRDS("/misc/pichu/data/lara/objects/methylated/methylatedPromoter_significantGenes_kmt.rds") %>%
+  { colnames(.)[1] <- "chr"; . }
+
+meta.data <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/ANALYSIS/MOFA/metadata.all.latest.dat") %>%
+  dplyr::filter(Hall_class!="TKMT") %>%
+  dplyr::filter(Hall_class %in% c("BCR","KMT")) %>%
+  dplyr::filter(!sample %in% c("NUT_1.T")) %>%
+  dplyr::filter(startsWith(sample, "BCR_4.") |
+                startsWith(sample, "BCR_13.") |
+                startsWith(sample, "KMT_2.") |
+                startsWith(sample, "KMT_4."))%>%
+  rownames_to_column("old") %>%
+  dplyr::select(-"old") %>%
+  column_to_rownames("sample")
+
+meta.bcr <- meta.data %>%
+  dplyr::filter(Hall_class == "BCR") %>%
+  dplyr::mutate(is_relapsed = grepl("relapsed", ID_Jena) | grepl("relapsed", rownames(meta.bcr))) %>% 
+  dplyr::arrange(is_relapsed, .by_group = TRUE) %>%
+  dplyr::select(-is_relapsed) 
+
+meta.kmt <- meta.data %>%
+  dplyr::filter(Hall_class == "KMT") %>%
+  dplyr::mutate(is_relapsed = grepl("relapsed", ID_Jena) | grepl("relapsed", rownames(meta.kmt))) %>% 
+  dplyr::arrange(is_relapsed, .by_group = TRUE) %>%
+  dplyr::select(-is_relapsed) 
+
+#Calculated for general methylation
+summary_table.bcr <- readRDS("/misc/pichu/data/lara/objects/mean_table_bcr.rds")
+summary_table.kmt <- readRDS("/misc/pichu/data/lara/objects/mean_table_kmt.rds")
+
+```
+
+```{r Get methylated Promoter significant. DE genes and their ranges}
+methylatedPromoter_significantGenes_ranges.bcr$DMR <- paste0(
+  methylatedPromoter_significantGenes_ranges.bcr$chr, ":",
+  methylatedPromoter_significantGenes_ranges.bcr$start, "-",
+  methylatedPromoter_significantGenes_ranges.bcr$end
+)
+
+methylatedPromoter_significantGenes_ranges.kmt$DMR <- paste0(
+  methylatedPromoter_significantGenes_ranges.kmt$chr, ":",
+  methylatedPromoter_significantGenes_ranges.kmt$start, "-",
+  methylatedPromoter_significantGenes_ranges.kmt$end
+)
+matched_table.bcr <- summary_table.bcr %>%
+  inner_join(methylatedPromoter_significantGenes_ranges.bcr,
+             by = c("DMR" = "DMR", "SYMBOL" = "SYMBOL")) %>%
+  select(-ENSEMBL.y) %>%               
+  dplyr::rename(ENSEMBL = ENSEMBL.x)   # In total: 13
+matched_table.bcr <- matched_table.bcr[, 1:7]
+
+matched_table.kmt <- summary_table.kmt %>%
+  inner_join(methylatedPromoter_significantGenes_ranges.kmt,
+             by = c("DMR" = "DMR", "SYMBOL" = "SYMBOL"))%>%
+  select(-ENSEMBL.y) %>%               
+  dplyr::rename(ENSEMBL = ENSEMBL.x)   #In total: 32
+matched_table.kmt <- matched_table.kmt[, 1:7]
+```
+
+## Heatmap for significant genes that have also have methylated promoter (Expression)
+
+```{r Get Z-score matrix for BCR and KMT}
+# Get only methylated genes from significant genes
+filtered_significantGenes.bcr <- significantGenes.bcr[significantGenes.bcr$ENSEMBL %in% matched_table.bcr$ENSEMBL,]
+
+# Create column with (symbol) genenames
+filtered_significantGenes.bcr$symbol <- mapIds(org.Hs.eg.db, keys = filtered_significantGenes.bcr$ENSEMBL, keytype = "ENSEMBL", column = "SYMBOL")
+
+# Get normalized counts
+dds.bcr <- estimateSizeFactors(dds.bcr)
+normalized_counts.bcr <- counts(dds.bcr, normalized = TRUE)[filtered_significantGenes.bcr$ENSEMBL,]
+
+# Get Z score
+matrix_zscores.bcr<- t(apply(normalized_counts.bcr, 1, scale))
+colnames(matrix_zscores.bcr) <- colnames(normalized_counts.bcr)
+
+
+
+ordered_columns <- c("BCR_4.C", "BCR_13.T", "BCR_4.C_relapsed", "BCR_13.T_relapsed")
+matrix_zscores.bcr_ordered <- matrix_zscores.bcr[, ordered_columns]
+
+# Create HeatMap
+ht.bcr <- Heatmap(matrix_zscores.bcr, 
+        cluster_rows = TRUE, 
+        cluster_columns = F, 
+        column_labels = colnames(matrix_zscores.bcr_ordered), 
+        name = "Z-score", 
+        row_labels = filtered_significantGenes.bcr$symbol[match(rownames(matrix_zscores.bcr_ordered), filtered_significantGenes.bcr$ENSEMBL)], 
+        column_title = "Expression")
+# Save as image
+png('/misc/pichu/data/lara/figures/SimpleHeatmap_significantMethylatedPromoterGenes.bcr.png', res=250, height=1500, width = 1500)
+print(ht.bcr)
+dev.off()
+
+
+# Get only methylated genes from significant genes
+filtered_significantGenes.kmt <- significantGenes.kmt[significantGenes.kmt$ENSEMBL %in% matched_table.kmt$ENSEMBL,]
+
+# Create column with (symbol) genenames
+filtered_significantGenes.kmt$symbol <- mapIds(org.Hs.eg.db, keys = filtered_significantGenes.kmt$ENSEMBL, keytype = "ENSEMBL", column = "SYMBOL")
+
+# Get normalized counts
+dds.kmt <- estimateSizeFactors(dds.kmt)
+normalized_counts.kmt <- counts(dds.kmt, normalized = TRUE)[filtered_significantGenes.kmt$ENSEMBL,]
+
+# Get Z score
+matrix_zscores.kmt<- t(apply(normalized_counts.kmt, 1, scale))
+colnames(matrix_zscores.kmt) <- colnames(normalized_counts.kmt)
+
+
+ordered_columns.kmt <- c("KMT_2.I", "KMT_4.I", "KMT_2.I_relapsed", "KMT_4.I_relapsed")
+matrix_zscores.kmt_ordered <- matrix_zscores.kmt[, ordered_columns.kmt]
+
+# Create HeatMap
+ht.kmt <- Heatmap(matrix_zscores.kmt_ordered, 
+        cluster_rows = TRUE, 
+        cluster_columns = F, 
+        column_labels = colnames(matrix_zscores.kmt_ordered), 
+        name = "Z-score", 
+        row_labels = filtered_significantGenes.kmt$symbol[match(rownames(matrix_zscores.kmt_ordered), filtered_significantGenes.kmt$ENSEMBL)], 
+        column_title = "Expression")
+# Save as image
+png('/misc/pichu/data/lara/figures/SimpleHeatmap_significantMethylatedPromoterGenes.kmt.png', res=250, height=1500, width = 1500)
+print(ht.bcr)
+dev.off()
+```
+
+```{r Annotation}
+# Annotation
+annotation_data_expression.bcr <- data.frame(
+  Sample = colnames(matrix_zscores.bcr_ordered),
+  Condition = ifelse(grepl("relapsed", colnames(matrix_zscores.bcr_ordered), ignore.case = TRUE), "relapsed", "diagnosis")
+)
+a_expression.bcr <- HeatmapAnnotation(
+  condition = annotation_data_expression.bcr$Condition,
+  col = list(condition = c("diagnosis" = "#FFDE55", "relapsed" = "#4DCEF2")),
+  show_annotation_name = FALSE
+)
+
+annotation_data_expression.kmt <- data.frame(
+  Sample = colnames(matrix_zscores.kmt_ordered),
+  Condition = ifelse(grepl("relapsed", colnames(matrix_zscores.kmt_ordered), ignore.case = TRUE), "relapsed", "diagnosis")
+)
+
+a_expression.kmt <- HeatmapAnnotation(
+  condition = annotation_data_expression.kmt$Condition,
+  col = list(condition = c("diagnosis" = "#FFDE55", "relapsed" = "#4DCEF2")),
+  show_annotation_name = FALSE
+)
+```
+
+```{r HeatMap for Expression, fig.height=15}
+# Erstelle das Heatmap-Objekt
+colnames.bcr <- c("BCR_4.C", "BCR_13.C", "BCR_4.C","BCR_13.C")
+ht_c.bcr <- Heatmap(matrix_zscores.bcr_ordered[matched_table.bcr$ENSEMBL,], 
+              cluster_rows = F, 
+              cluster_columns = F, 
+              column_labels = colnames.bcr, 
+              name = "Z-score", 
+              row_labels = matched_table.bcr$SYMBOL,
+              row_names_side = "left",
+              show_row_dend = FALSE,
+              column_title = "Expression",
+              top_annotation = a_expression.bcr)
+
+colnames_kmt <- c("KMT_2.I", "KMT_4.I", "KMT_2.I", "KMT_4.I")
+ht_c.kmt <- Heatmap(matrix_zscores.kmt_ordered[matched_table.kmt$ENSEMBL,], 
+              cluster_rows = F, 
+              cluster_columns = F, 
+              column_labels = colnames_kmt,
+              name = "Z-score", 
+              row_labels = matched_table.kmt$SYMBOL,
+              row_names_side = "left",
+              show_row_dend = FALSE,
+              column_title = "Expression",
+              top_annotation = a_expression.kmt)
+
+```
+
+## Create table with means of each cpg region and assign each range to the corresponding gene name -> Methylation matrix
+
+```{r For BCR}
+# Create new table with DMR column which contains NA values
+filtered_cpg_data.bcr <- cpg_data.bcr %>% mutate(DMR = NA, SYMBOL = NA)
+
+# Create GenomicRanges objects
+gr_methylated.bcr <- GRanges(seqnames = methylated_significantGenes_ranges.bcr$chr, 
+                             ranges = IRanges(start = methylated_significantGenes_ranges.bcr$start, 
+                                              end = methylated_significantGenes_ranges.bcr$end)) 
+
+gr_cpg.bcr <- GRanges(seqnames = cpg_data.bcr$chr, 
+                      ranges = IRanges(start = cpg_data.bcr$pos,
+                                       end = cpg_data.bcr$pos)) 
+saveRDS(gr_cpg.bcr, "/misc/pichu/data/lara/objects/gr_cpg_bcr.rds")
+# Find intersection of GenomicRanges objects
+intersected <- subsetByOverlaps(gr_cpg.bcr, gr_methylated.bcr)
+
+# Iterate over the rows and add DMR and SYMBOL information
+for (i in seq_along(intersected)) {
+  matching_rows <- which(
+    as.character(filtered_cpg_data.bcr$chr) == as.character(seqnames(intersected)[i]) &
+      filtered_cpg_data.bcr$pos == start(intersected)[i]
+  )
+  
+  # Find overlap regions
+  overlapping_regions <- methylated_significantGenes_ranges.bcr[
+    methylated_significantGenes_ranges.bcr$chr == as.character(seqnames(intersected)[i]) &
+      methylated_significantGenes_ranges.bcr$start <= start(intersected)[i] &
+      methylated_significantGenes_ranges.bcr$end >= start(intersected)[i], ]
+  
+  # Create DMR string
+  dmr_value <- paste(
+    overlapping_regions$chr, 
+    paste(overlapping_regions$start, overlapping_regions$end, sep = "-"), 
+    sep = ":", 
+    collapse = ";"
+  )
+  
+  # Extract SYMBOL values
+  symbol_value <- paste(overlapping_regions$SYMBOL, collapse = ";")
+  
+  # Assign the DMR string and SYMBOL to the corresponding rows
+  filtered_cpg_data.bcr$DMR[matching_rows] <- dmr_value
+  filtered_cpg_data.bcr$SYMBOL[matching_rows] <- symbol_value
+}
+
+# Remove rows with NA in DMR and bring DMR to the first column
+filtered_cpg_data.bcr <- filtered_cpg_data.bcr %>%
+  filter(!is.na(DMR)) %>%
+  select(DMR, SYMBOL, everything())
+
+# Replace "." with NA
+filtered_cpg_data.bcr <- filtered_cpg_data.bcr %>%
+  mutate(
+    BCR_diagnosed_N1 = na_if(BCR_diagnosed_N1, "."),
+    BCR_diagnosed_N2 = na_if(BCR_diagnosed_N2, "."),
+    BCR_relapsed_N1 = na_if(BCR_relapsed_N1, "."),
+    BCR_relapsed_N2 = na_if(BCR_relapsed_N2, ".")
+  )
+
+# Create summary table
+summary_table.bcr <- filtered_cpg_data.bcr %>%
+  group_by(DMR, SYMBOL) %>% 
+  summarize(
+    mean_BCR_diagnosed_N1 = mean(as.numeric(BCR_diagnosed_N1), na.rm = TRUE),
+    mean_BCR_diagnosed_N2 = mean(as.numeric(BCR_diagnosed_N2), na.rm = TRUE),
+    mean_BCR_relapsed_N1 = mean(as.numeric(BCR_relapsed_N1), na.rm = TRUE),
+    mean_BCR_relapsed_N2 = mean(as.numeric(BCR_relapsed_N2), na.rm = TRUE)
+  )
+
+# Add ENSEMBL ID column
+summary_table.bcr <- summary_table.bcr %>%
+  mutate(
+    ENSEMBL = mapIds(
+      org.Hs.eg.db,
+      keys = SYMBOL,
+      column = "ENSEMBL",
+      keytype = "SYMBOL",
+      multiVals = "first"
+    ) 
+  )
+summary_table.bcr <- summary_table.bcr %>%
+  relocate(ENSEMBL, .after = 2) 
+
+saveRDS(summary_table.bcr, file = "/misc/pichu/data/lara/objects/mean_table_bcr.rds")
+```
+
+```{r For KMT}
+# Create new table with DMR column which contains NA values
+filtered_cpg_data.kmt <- cpg_data.kmt %>% mutate(DMR = NA, SYMBOL = NA)
+
+# Create GenomicRanges objects
+gr_methylated.kmt <- GRanges(seqnames = methylated_significantGenes_ranges.kmt$chr, 
+                             ranges = IRanges(start = methylated_significantGenes_ranges.kmt$start, 
+                                              end = methylated_significantGenes_ranges.kmt$end)) 
+
+gr_cpg.kmt <- GRanges(seqnames = cpg_data.kmt$chr, 
+                      ranges = IRanges(start = cpg_data.kmt$pos,
+                                       end = cpg_data.kmt$pos)) 
+saveRDS(gr_cpg.kmt, "/misc/pichu/data/lara/objects/gr_cpg_kmt.rds")
+# Find intersection of GenomicRanges objects
+intersected2 <- subsetByOverlaps(gr_cpg.kmt, gr_methylated.kmt)
+
+# Iterate over the rows and add DMR and SYMBOL information
+for (j in seq_along(intersected2)) {
+  # Get rows that match with intersected
+  matching_rows2 <- which(
+    as.character(filtered_cpg_data.kmt$chr) == as.character(seqnames(intersected2)[j]) &
+      filtered_cpg_data.kmt$pos == start(intersected2)[j]
+  )
+  
+  # Find overlap regions
+  overlapping_regions2 <- methylated_significantGenes_ranges.kmt[
+    methylated_significantGenes_ranges.kmt$chr == as.character(seqnames(intersected2)[j]) &
+      methylated_significantGenes_ranges.kmt$start <= start(intersected2)[j] &
+      methylated_significantGenes_ranges.kmt$end >= start(intersected2)[j], ]
+  
+  # Create DMR string
+  dmr_value <- paste(
+    overlapping_regions2$chr, 
+    paste(overlapping_regions2$start, overlapping_regions2$end, sep = "-"), 
+    sep = ":", 
+    collapse = ";"
+  )
+  
+  # Extract SYMBOL values
+  symbol_value <- paste(overlapping_regions2$SYMBOL, collapse = ";")
+  
+  # Assign the DMR string and SYMBOL to the corresponding rows
+  filtered_cpg_data.kmt$DMR[matching_rows2] <- dmr_value
+  filtered_cpg_data.kmt$SYMBOL[matching_rows2] <- symbol_value
+}
+
+# Remove rows with NA in DMR and bring DMR to the first column
+filtered_cpg_data.kmt <- filtered_cpg_data.kmt %>%
+  filter(!is.na(DMR)) %>%
+  select(DMR, SYMBOL, everything())
+
+# Replace "." with NA
+filtered_cpg_data.kmt <- filtered_cpg_data.kmt %>%
+  mutate(
+    KMT_diagnosed_N1 = na_if(KMT_diagnosed_N1, "."),
+    KMT_diagnosed_N2 = na_if(KMT_diagnosed_N2, "."),
+    KMT_relapsed_N1 = na_if(KMT_relapsed_N1, "."),
+    KMT_relapsed_N2 = na_if(KMT_relapsed_N2, ".")
+  )
+
+# Create summary table
+summary_table.kmt <- filtered_cpg_data.kmt %>%
+  group_by(DMR, SYMBOL) %>% # Group by DMR and SYMBOL
+  summarize(
+    mean_KMT_diagnosed_N1 = mean(as.numeric(KMT_diagnosed_N1), na.rm = TRUE),
+    mean_KMT_diagnosed_N2 = mean(as.numeric(KMT_diagnosed_N2), na.rm = TRUE),
+    mean_KMT_relapsed_N1 = mean(as.numeric(KMT_relapsed_N1), na.rm = TRUE),
+    mean_KMT_relapsed_N2 = mean(as.numeric(KMT_relapsed_N2), na.rm = TRUE)
+  )
+
+# Add ENSEMBL ID column
+summary_table.kmt <- summary_table.kmt %>%
+  mutate(
+    ENSEMBL = mapIds(
+      org.Hs.eg.db,
+      keys = SYMBOL,
+      column = "ENSEMBL",
+      keytype = "SYMBOL",
+      multiVals = "first"
+    ) 
+  )
+summary_table.kmt <- summary_table.kmt %>%
+  relocate(ENSEMBL, .after = 2) 
+
+saveRDS(summary_table.kmt, file = "/misc/pichu/data/lara/objects/mean_table_kmt.rds")
+```
+
+## Heatmap for methylation
+
+```{r Annotation}
+# For Methylation
+annotation_data_methyl.bcr <- data.frame(
+  Sample = colnames(matched_table.bcr),
+  Condition = ifelse(grepl("relapsed", colnames(matched_table.bcr), ignore.case = TRUE), "relapsed", "diagnosis")
+)
+annotation_data_methyl.bcr <- annotation_data_methyl.bcr[-c(1:3), ]
+
+annotation_data_methyl.kmt <- data.frame(
+  Sample = colnames(matched_table.kmt),
+  Condition = ifelse(grepl("relapsed", colnames(matched_table.kmt), ignore.case = TRUE), "relapsed", "diagnosis")
+)
+annotation_data_methyl.kmt <- annotation_data_methyl.kmt[-c(1:3), ]
+
+# Erstelle die heatannotation für die Bedingungen
+a_methyl.bcr <- HeatmapAnnotation(
+  condition = annotation_data_methyl.bcr$Condition,
+  col = list(condition = c("diagnosis" = "#FFDE55", "relapsed" = "#4DCEF2"))
+)
+a_methyl.kmt <- HeatmapAnnotation(
+  condition = annotation_data_methyl.kmt$Condition,
+  col = list(condition = c("diagnosis" = "#FFDE55", "relapsed" = "#4DCEF2"))
+)
+
+```
+
+```{r Heatmap for Methylation}
+methyl.heatmap <- colorRamp2(c(0,0.25,0.5,0.75,1),
+                          c("#001F47","#5A70A2","white","#FFA458","#924800"))
+colnames(matched_table.bcr) <- c("DMR", "SYMBOL", "ENSEMBL", "BCR_4.C", "BCR_13.T", "BCR_4.C", "BCR_13.T")
+
+
+ht_methyl.bcr <- Heatmap(as.matrix(matched_table.bcr[,-c(1:3)]),
+        column_title = "Associated CpGs",
+        name = "methylation",
+        col=methyl.heatmap,
+        cluster_columns = F, show_column_names = TRUE, cluster_rows = F,
+        show_row_names = FALSE,
+        top_annotation = a_methyl.bcr
+        )
+
+colnames(matched_table.kmt) <- c("DMR", "SYMBOL", "ENSEMBL", "KMT_2.I", "KMT_4.I", "KMT_2.I",  "KMT_4.I")
+
+ht_methyl.kmt <- Heatmap(as.matrix(matched_table.kmt[,-c(1:3)]),
+        column_title = "Associated CpGs",
+        name = "methylation",
+        col=methyl.heatmap,
+        cluster_columns = F, show_column_names = TRUE, cluster_rows = F,
+        show_row_names = FALSE,
+        top_annotation = a_methyl.kmt
+        )
+
+```
+
+## Complex Heatmap
+
+```{r Combine Heatmaps, fig.height=15}
+ht_c.bcr + ht_methyl.bcr
+ht_c.kmt + ht_methyl.kmt
+```
+
+```{r Saving files}
+png("/misc/pichu/data/lara/figures/ComplexHeatMap_BCR.png", res = 190, width = 1100, height = 1200)
+print(ht_c.bcr + ht_methyl.bcr)
+dev.off()
+
+png("/misc/pichu/data/lara/figures/ComplexHeatMap_KMT.png", res = 150, width = 1200, height = 2000)
+print(ht_c.kmt + ht_methyl.kmt)
+dev.off()
+```
+

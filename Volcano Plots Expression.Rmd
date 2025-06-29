@@ -1,0 +1,183 @@
+---
+title: "Volcano Plots for Expression"
+author: "lara"
+date: "2025-02-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(DESeq2)
+library(ggplot2)
+library(ComplexHeatmap)
+library("org.Hs.eg.db")
+library(GenomicRanges)
+library(circlize)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ggrepel)
+install.packages("readxl")
+library(readxl)
+
+```
+
+```{r Read-in data}
+sig.genes.bcr <-readRDS("/misc/pichu/data/lara/objects/significantGenes_bcr.rds") %>%
+  tibble::rownames_to_column("ENSEMBL")
+sig.genes.kmt <-readRDS("/misc/pichu/data/lara/objects/significantGenes_kmt.rds") %>%
+  tibble::rownames_to_column("ENSEMBL")
+
+dds.bcr <- readRDS("/misc/pichu/data/lara/objects/dds/dds.bcr.rds")
+dds.kmt <- readRDS("/misc/pichu/data/lara/objects/dds/dds.kmt.rds")
+
+res.bcr <- results(dds.bcr)
+res.kmt <- results(dds.kmt)
+
+res.bcr.df <- as.data.frame(res.bcr)
+res.kmt.df <- as.data.frame(res.kmt)
+```
+
+```{r Symbol column }
+sig.genes.bcr$SYMBOL <- mapIds(
+  org.Hs.eg.db, 
+  keys = sig.genes.bcr$ENSEMBL, 
+  column = "SYMBOL", 
+  keytype = "ENSEMBL", 
+  multiVals = "first"
+)
+sig.genes.kmt$SYMBOL <- mapIds(
+  org.Hs.eg.db, 
+  keys = sig.genes.kmt$ENSEMBL, 
+  column = "SYMBOL", 
+  keytype = "ENSEMBL", 
+  multiVals = "first"
+)
+```
+
+## Volcano Plots
+
+```{r Volcano Plot for Significant Genes}
+
+# BCR
+pdf("/misc/pichu/data/lara/figures/EVolcano_BCR.pdf", width = 13, height = 11)
+EnhancedVolcano(sig.genes.bcr,
+    lab = sig.genes.bcr$SYMBOL,
+    title = 'BCR vs Relapsed BCR',
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    labSize =7)
+dev.off()
+
+# KMT
+pdf("/misc/pichu/data/lara/figures/EVolcano_KMT.pdf", width = 13, height = 11)
+EnhancedVolcano(sig.genes.kmt,
+    lab = sig.genes.kmt$SYMBOL,
+    title = 'KMT vs Relapsed KMT',
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    labSize =7)
+dev.off()
+
+```
+
+```{r Volcano Plot for All Genes}
+res.bcr.df$SYMBOL <- mapIds(
+  org.Hs.eg.db, 
+  keys = rownames(res.bcr.df), 
+  column = "SYMBOL", 
+  keytype = "ENSEMBL", 
+  multiVals = "first"
+)
+res.kmt.df$SYMBOL <- mapIds(
+  org.Hs.eg.db, 
+  keys = rownames(res.kmt.df), 
+  column = "SYMBOL", 
+  keytype = "ENSEMBL", 
+  multiVals = "first"
+)
+```
+
+# Get only protein coding genes
+
+```{r Only Protein Coding Genes}
+protein.coding <- genes(edb, filter=GeneBiotypeFilter("protein_coding"))
+protein.coding.id <- mcols(protein.coding)$gene_id
+
+res.bcr.protein.df <- res.bcr.df[rownames(res.bcr.df) %in% protein.coding.id, ]
+saveRDS(res.bcr.protein.df, "/misc/pichu/data/lara/objects/protein_coding_genes_bcr.rds")
+
+res.kmt.protein.df <- res.kmt.df[rownames(res.kmt.df) %in% protein.coding.id, ]
+saveRDS(res.kmt.protein.df, "/misc/pichu/data/lara/objects/protein_coding_genes_kmt.rds")
+
+sum(res.bcr.protein.df$padj < 0.1, na.rm=TRUE) #65
+sum(res.bcr.protein.df$padj < 0.1 & res.bcr.protein.df$log2FoldChange < 0, na.rm = TRUE) #down = 28
+sum(res.bcr.protein.df$padj < 0.1 & res.bcr.protein.df$log2FoldChange > 0, na.rm = TRUE) #up = 37
+
+
+sum(res.kmt.protein.df$padj < 0.1, na.rm=TRUE) #635
+sum(res.kmt.protein.df$padj < 0.1 & res.kmt.protein.df$log2FoldChange < 0, na.rm = TRUE) #down = 150
+sum(res.kmt.protein.df$padj < 0.1 & res.kmt.protein.df$log2FoldChange > 0, na.rm = TRUE) #up = 485
+```
+
+
+```{r}
+pdf("/misc/pichu/data/lara/figures/EVolcano_all_genes_BCR.pdf", width = 13, height = 11)
+EnhancedVolcano(res.bcr.df,
+                title = "Volcano Plot of Differential Gene Expression in BCR Relapse vs. Diagnosis",
+  lab = res.bcr.df$SYMBOL,
+  x = "log2FoldChange",
+  y = "padj",
+  pCutoff = 0.1,   
+  FCcutoff = 1     
+)
+dev.off()
+
+pdf("/misc/pichu/data/lara/figures/EVolcano_all_genes_KMT.pdf", width = 13, height = 11)
+EnhancedVolcano(res.kmt.df,
+                title = "Volcano Plot of Differential Gene Expression in KMT Relapse vs. Diagnosis",
+  lab = res.kmt.df$SYMBOL,
+  x = "log2FoldChange",
+  y = "padj",
+  pCutoff = 0.1,   
+  FCcutoff = 1     
+)
+dev.off()
+
+pdf("/misc/pichu/data/lara/figures/EVolcano_protein_coding_genes_BCR.pdf", width = 13, height = 11)
+EnhancedVolcano(res.bcr.protein.df,
+                title = "Volcano Plot of Differential Gene Expression in BCR Relapse vs. Diagnosis",
+  lab = res.bcr.protein.df$SYMBOL,
+  labSize = 9,
+  x = "log2FoldChange",
+  y = "padj",
+  pCutoff = 0.1,  
+  FCcutoff = 1     
+)
+dev.off()
+
+pdf("/misc/pichu/data/lara/figures/EVolcano_protein_coding_genes_KMT.pdf", width = 13, height = 11)
+EnhancedVolcano(res.kmt.protein.df,
+                title = "Volcano Plot of Differential Gene Expression in KMT Relapse vs. Diagnosis",
+  lab = res.kmt.protein.df$SYMBOL,
+  labSize = 9,
+  x = "log2FoldChange",
+  y = "padj",
+  pCutoff = 0.1,   
+  FCcutoff = 1    
+)
+dev.off()
+```
+
+```{r Check how much up-or downregulated}
+
+res.bcr.protein.df[res.bcr.protein.df$log2FoldChange < 0 & res.bcr.protein.df$pvalue < 0.05, ] # 6,960
+res.bcr.protein.df[res.bcr.protein.df$log2FoldChange < 0 & res.bcr.protein.df$padj < 0.1, ] # 6,960
+
+res.bcr.protein.df[res.bcr.protein.df$padj >0.1,] # 13,545
+res.bcr.protein.df[res.bcr.protein.df$log2FoldChange > 0, ] # 6,650
+
+res.kmt.protein.df[res.kmt.protein.df$log2FoldChange < 0, ] # 6,384
+res.kmt.protein.df[res.kmt.protein.df$log2FoldChange > 0, ] # 7,124
+
+```
+

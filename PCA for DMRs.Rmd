@@ -1,0 +1,257 @@
+---
+title: "PCA for DMRs"
+author: "lara"
+date: "2025-01-27"
+output: html_document
+---
+```{r setup, include=FALSE}
+library(DESeq2)
+library(ggplot2)
+library(ComplexHeatmap)
+library("org.Hs.eg.db")
+library(GenomicRanges)
+library(circlize)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ggrepel)
+
+```
+
+## Read-in data
+
+```{r Load data}
+cs.all.dmr.mean <- readRDS("/misc/paras/data/www/ALL/data/processed/Jan21/ANALYSIS/WGBS_basics/cs.all.dmr.mean.rds")
+meta_with_relapsed <- readRDS("/misc/pichu/data/lara/objects/meta_data_with_relapsed.rds")
+meta <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/ANALYSIS/MOFA/metadata.all.latest.dat") %>%
+  dplyr::filter(Hall_class!="TKMT") %>%
+  dplyr::filter(!grepl("relapsed",sample)) %>%
+  dplyr::filter(!sample %in% c("NUT_1.T")) # with new BCR samples
+
+cpg_data.bcr <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/WGBS/metilene/segemehl/haarz/BCR_diagnosed-vs-BCR_relapsed/merates.bedg")
+cpg_data.kmt <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/WGBS/metilene/segemehl/haarz/KMT_diagnosed-vs-KMT_relapsed/merates.bedg")
+
+methylatedRegions.bcr <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/WGBS/metilene/segemehl/haarz/BCR_diagnosed-vs-BCR_relapsed/dmr.tsv")
+methylatedRegions.kmt <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/WGBS/metilene/segemehl/haarz/KMT_diagnosed-vs-KMT_relapsed/dmr.tsv")
+```
+
+
+## PCA for methylation data -> Alena
+
+```{r PCA}
+pal.cat <- c("#E7AC92","#706EA1","#E7D392","#629C86","#B4729B","#627D96","#CEDE8C","#263056","#FF7061")
+names(pal.cat) <- c("BCR","CML", "HPR","HYP", "KMT","NUT","TCF","TEL","DNMT3B")
+
+cs.all.dmr.mean.filt <- cs.all.dmr.mean %>%
+  drop_na() %>%
+  as.matrix()
+
+pca.res <- prcomp(t(cs.all.dmr.mean.filt), center = TRUE, scale = TRUE)
+percentVar <- round(100*pca.res$sdev^2 / sum(pca.res$sdev^2),1)
+
+plot(cumsum(percentVar)[1:10], 
+     ylim = c(0,100),
+     xlab = "PC #", ylab = "Amount of explained variance", 
+     main = "Cumulative variance plot")
+
+## assign the meta data to the PCA coordinates
+wgbs.pca.df <- data.frame(pca.res$x) %>%
+  rownames_to_column("ID") %>%
+  left_join(meta, by=c("ID"="sample"))
+
+ggplot(wgbs.pca.df, aes(x=PC1,y=PC2,color=Hall_class,shape=Age_class))+ #shape=as.factor(ATAC.batch)
+  guides(
+      shape = guide_legend(order = 1),
+      color = guide_legend(order = 2)
+    ) +
+  geom_point(alpha=0.7,size=4)+
+  scale_color_manual(values=pal.cat)+
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  geom_text_repel(aes(label = Case_no),
+                  size = 3) +
+  labs(title = "PCA based on WGBS DMRs, shape by age class",
+       subtitle = paste("n =", nrow(cs.all.dmr.mean.filt))) + 
+  theme_classic() +
+  theme(legend.position = "right", 
+        axis.text = element_text(size=14),
+        axis.title = element_text(size=15)) 
+
+ggsave("/misc/pichu/data/lara/figures/PCA_DMRs_without_Relapsed.pdf",width=7, height=5)
+```
+
+## Get table with means
+
+```{r Extract rownames of cs.all.dmr.mean}
+row_names <- rownames(cs.all.dmr.mean.filt)
+
+gr_row_names <- GRanges(row_names)
+```
+
+```{r Create GenomicRanges and intersections}
+
+gr_cpg.bcr <- makeGRangesFromDataFrame(cpg_data.bcr,
+                                       seqnames = "chr", 
+                                       start.field = "pos",
+                                       end.field = "pos",
+                                       keep.extra.columns = TRUE) 
+gr_cpg.kmt <- makeGRangesFromDataFrame(cpg_data.kmt,
+                                       seqnames = "chr", 
+                                       start.field = "pos",
+                                       end.field = "pos",
+                                       keep.extra.columns = TRUE) 
+
+intersected.bcr <- subsetByOverlaps(gr_cpg.bcr, gr_row_names)
+
+intersected.kmt <- subsetByOverlaps(gr_cpg.kmt, gr_row_names) 
+
+all_dmr_regions <- data.frame(
+  DMR = rownames(cs.all.dmr.mean.filt)
+)
+```
+
+```{r BCR}
+overlaps.bcr <- findOverlaps(gr_row_names, gr_cpg.bcr)
+
+# Zuordnung der Werte basierend auf den Überschneidungen
+aggregated_values.bcr <- as.data.frame(overlaps.bcr) %>%
+  rename(region_index = queryHits, position_index = subjectHits) %>%
+  mutate(
+    region_chr = as.character(seqnames(gr_row_names)[region_index]),
+    region_start = start(gr_row_names)[region_index],
+    region_end = end(gr_row_names)[region_index],
+    value_N1 = as.numeric(ifelse(mcols(gr_cpg.bcr)$BCR_diagnosed_N1[position_index] == ".", NA, 
+                                 mcols(gr_cpg.bcr)$BCR_diagnosed_N1[position_index])),
+    value_N2 = as.numeric(ifelse(mcols(gr_cpg.bcr)$BCR_diagnosed_N2[position_index] == ".", NA, 
+                                 mcols(gr_cpg.bcr)$BCR_diagnosed_N2[position_index])),
+    value_relapsed_N1 = as.numeric(ifelse(mcols(gr_cpg.bcr)$BCR_relapsed_N1[position_index] == ".", NA, 
+                                          mcols(gr_cpg.bcr)$BCR_relapsed_N1[position_index])),
+    value_relapsed_N2 = as.numeric(ifelse(mcols(gr_cpg.bcr)$BCR_relapsed_N2[position_index] == ".", NA, 
+                                          mcols(gr_cpg.bcr)$BCR_relapsed_N2[position_index]))
+  ) %>%
+  group_by(region_chr, region_start, region_end) %>%
+  summarize(
+    BCR_4.C = mean(value_N1, na.rm = TRUE),
+    BCR_13.T = mean(value_N2, na.rm = TRUE),
+    BCR_4.C_relapsed = mean(value_relapsed_N1, na.rm = TRUE),
+    BCR_13.T_relapsed = mean(value_relapsed_N2, na.rm = TRUE),
+    .groups = "drop"
+  )
+aggregated_values.bcr <- aggregated_values.bcr %>%
+  mutate(
+    region_key = paste(region_chr, paste(region_start, region_end, sep = "-"), sep = ":"),
+    DMR = rownames(cs.all.dmr.mean.filt)[match(region_key, rownames(cs.all.dmr.mean.filt))]
+  )
+
+final_table.bcr <- all_dmr_regions %>%
+  left_join(aggregated_values.bcr, by = "DMR")%>%
+  select(-c(region_key,region_chr, region_start, region_end, BCR_4.C, BCR_13.T))
+  
+
+saveRDS(final_table.bcr, "/misc/pichu/data/lara/objects/table_for_pca_new.bcr.rds")
+```
+
+```{r KMT}
+overlaps.kmt <- findOverlaps(gr_row_names, gr_cpg.kmt)
+
+# Zuordnung der Werte basierend auf den Überschneidungen
+aggregated_values.kmt <- as.data.frame(overlaps.kmt) %>%
+  rename(region_index = queryHits, position_index2 = subjectHits) %>%
+    mutate(
+    region_chr = as.character(seqnames(gr_row_names)[region_index]),
+    region_start = start(gr_row_names)[region_index],
+    region_end = end(gr_row_names)[region_index],
+    value_N1 = as.numeric(ifelse(mcols(gr_cpg.kmt)$KMT_diagnosed_N1[position_index2] == ".", NA, 
+                                 mcols(gr_cpg.kmt)$KMT_diagnosed_N1[position_index2])),
+    value_N2 = as.numeric(ifelse(mcols(gr_cpg.kmt)$KMT_diagnosed_N2[position_index2] == ".", NA, 
+                                 mcols(gr_cpg.kmt)$KMT_diagnosed_N2[position_index2])),
+    value_relapsed_N1 = as.numeric(ifelse(mcols(gr_cpg.kmt)$KMT_relapsed_N1[position_index2] == ".", NA, 
+                                          mcols(gr_cpg.kmt)$KMT_relapsed_N1[position_index2])),
+    value_relapsed_N2 = as.numeric(ifelse(mcols(gr_cpg.kmt)$KMT_relapsed_N2[position_index2] == ".", NA, 
+                                          mcols(gr_cpg.kmt)$KMT_relapsed_N2[position_index2])) 
+    ) %>%
+  group_by(region_chr, region_start, region_end) %>%
+  summarize(
+    KMT_2.I = mean(value_N1, na.rm = TRUE),
+    KMT_4.I = mean(value_N2, na.rm = TRUE),
+    KMT_2.I_relapsed = mean(value_relapsed_N1, na.rm = TRUE),
+    KMT_4.I_relapsed = mean(value_relapsed_N2, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+aggregated_values.kmt <- aggregated_values.kmt %>%
+  mutate(
+    region_key = paste(region_chr, paste(region_start, region_end, sep = "-"), sep = ":"),
+    DMR = rownames(cs.all.dmr.mean.filt)[match(region_key, rownames(cs.all.dmr.mean.filt))]
+  )
+
+final_table.kmt <- all_dmr_regions %>%
+  left_join(aggregated_values.kmt, by = "DMR")%>%
+  select(-c(region_key,region_chr, region_start, region_end, KMT_2.I, KMT_4.I))
+
+
+saveRDS(final_table.kmt, "/misc/pichu/data/lara/objects/table_for_pca.kmt.rds")
+```
+
+```{r arrange colnames}
+final_table.bcr <- final_table.bcr %>%
+  arrange(match(DMR, all_dmr_regions$DMR))
+
+final_table.kmt <- final_table.kmt %>%
+  arrange(match(DMR, all_dmr_regions$DMR))
+```
+
+
+```{r join tables}
+
+merged_table <- left_join(final_table.bcr, final_table.kmt, by = "DMR") %>%
+  tibble::column_to_rownames(var = "DMR") %>%
+  mutate(BCR_4.C_relapsed = ifelse(is.na(BCR_4.C_relapsed),BCR_13.T_relapsed,BCR_4.C_relapsed))
+
+```
+
+```{r find solution for missing BCR_4.C_relapsed}
+# how many NAs in each column
+colSums(is.na(merged_table))
+
+colnames(t(merged_table)) %in% rownames(pca.res$rotation)
+
+pca.rotation.df <- as.data.frame(rownames(pca.res$rotation))
+
+```
+
+```{r ggplot}
+
+projected_data <- predict(pca.res, newdata = t(merged_table))
+
+projected_data.df <- data.frame(projected_data) %>%
+  tibble::rownames_to_column(var = "ID") %>%
+  left_join(meta_with_relapsed, by =c("ID"="sample"))
+
+combined_data.df <- bind_rows(wgbs.pca.df,projected_data.df)%>%
+  mutate(Relapsed= ifelse(grepl("relapse",ID_Jena), TRUE,FALSE)) %>%
+  mutate(Age_rel = ifelse(Relapsed==1, "R", Age_class)) %>%
+  mutate(Age_rel = factor(Age_rel, levels = c("I","C","T","A","R")))
+
+
+ggplot(combined_data.df, aes(x=PC1,y=PC2,color=Hall_class,shape=Age_rel))+ #shape=as.factor(ATAC.batch)
+  guides(
+      shape = guide_legend(order = 1),
+      color = guide_legend(order = 2)
+    ) +
+  geom_point(alpha=0.7,size=4)+
+  scale_color_manual(values=pal.cat)+
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  geom_text_repel(aes(label = Case_no),
+                  size = 3) +
+  labs(title = "PCA based on WGBS DMRs, shape by age class + relapse samples",
+       subtitle = paste("n =", nrow(cs.all.dmr.mean.filt))) + 
+  theme_classic() +
+  theme(legend.position = "right", 
+        axis.text = element_text(size=14),
+        axis.title = element_text(size=15)) 
+
+ggsave("/misc/pichu/data/lara/figures/PCA_DMRs_with_Relapsed.pdf",width=7, height=5)
+```
+

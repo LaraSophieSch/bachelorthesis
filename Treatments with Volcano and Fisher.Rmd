@@ -1,0 +1,439 @@
+---
+title: "DE genes correlated with clinical treatment"
+author: "lara"
+date: "2025-02-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(DESeq2)
+library(ggplot2)
+library(ComplexHeatmap)
+library("org.Hs.eg.db")
+library(GenomicRanges)
+library(circlize)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ggrepel)
+install.packages("readxl")
+library(readxl)
+
+```
+
+```{r Read-in data}
+supplementary.data <- read_xlsx("/misc/pichu/data/lara/objects/excel/Supplementary Data 12.xlsx")
+colnames(supplementary.data)[1] <- "Description"
+
+genenames.supp <- supplementary.data$Description
+
+significant.bcr <- readRDS("/misc/pichu/data/lara/objects/significantGenes_bcr.rds")
+significant.kmt <- readRDS("/misc/pichu/data/lara/objects/significantGenes_kmt.rds")
+
+protein.bcr <- readRDS("/misc/pichu/data/lara/objects/protein_coding_genes_bcr.rds")
+protein.kmt <- readRDS("/misc/pichu/data/lara/objects/protein_coding_genes_kmt.rds")
+
+dds.bcr <- readRDS("/misc/pichu/data/lara/objects/dds/dds.bcr.rds")
+dds.kmt <- readRDS("/misc/pichu/data/lara/objects/dds/dds.kmt.rds")
+
+res.dds.bcr <- results(dds.bcr)
+res.dds.kmt <- results(dds.kmt)
+```
+
+## Significant genes
+
+```{r Filter and get SYMBOL values}
+sig.ensembl.bcr <- rownames(significant.bcr)
+
+sig.gene.list.bcr <- mapIds(
+  org.Hs.eg.db, 
+  keys = sig.ensembl.bcr , 
+  column = "SYMBOL", 
+  keytype = "ENSEMBL", 
+  multiVals = "first" 
+)
+
+sig.ensembl.kmt <- rownames(significant.kmt)
+
+sig.gene.list.kmt <- mapIds(
+  org.Hs.eg.db, 
+  keys = sig.ensembl.kmt, 
+  column = "SYMBOL", 
+  keytype = "ENSEMBL", 
+  multiVals = "first"
+)
+
+sig.gene.list.bcr.df <- as.data.frame(sig.gene.list.bcr)
+colnames(sig.gene.list.bcr.df) <- "SYMBOL"
+sig.gene.list.kmt.df <- as.data.frame(sig.gene.list.kmt)
+colnames(sig.gene.list.kmt.df) <- "SYMBOL"
+
+gene.list.bcr<- sig.gene.list.bcr.df$sig.gene.list.bcr
+gene.list.bcr <- gene.list.bcr[!is.na(gene.list.bcr)]
+gene.list.kmt <- sig.gene.list.kmt.df$sig.gene.list.kmt
+gene.list.kmt <- gene.list.kmt[!is.na(gene.list.kmt)]
+
+
+```
+
+```{r Find overlap to significant genes}
+sig_overlap_genes.bcr <- intersect(genenames.supp, gene.list.bcr)
+sig_overlap_genes.kmt <- intersect(genenames.supp, gene.list.kmt)
+```
+
+
+```{r Filter genes with treatment correlation}
+
+# Ensure that the first row is treated as a vector
+filtered_supplementary_data <- supplementary.data 
+colnames(filtered_supplementary_data) <- as.character(filtered_supplementary_data[1,])
+filtered_supplementary_data <- filtered_supplementary_data[-1,] 
+
+```
+
+## Get all data in significant genes table
+
+```{r Add log2foldchange, pvalue and symbol columns}
+
+significant_with_symbol.bcr <- significant.bcr %>%
+  mutate(SYMBOL = mapIds(
+    org.Hs.eg.db, 
+    keys = rownames(significant.bcr), 
+    column = "SYMBOL", 
+    keytype = "ENSEMBL", 
+    multiVals = "first"  
+  ))
+significant_with_symbol.kmt <- significant.kmt %>%
+  mutate(SYMBOL = mapIds(
+    org.Hs.eg.db, 
+    keys = rownames(significant.kmt),  
+    column = "SYMBOL", 
+    keytype = "ENSEMBL", 
+    multiVals = "first" 
+  ))
+```
+
+## Methotrexate
+
+```{r Filter methotrexate data}
+methotrexate_data <- filtered_supplementary_data
+colnames(methotrexate_data)[1] <- "Gene"
+colnames(methotrexate_data)[17] <- "Methotrexate2"
+
+methotrexate_data <-methotrexate_data %>%
+  select(c("Gene","Methotrexate","Methotrexate2"))
+
+# Remove rows where any column contains "-"
+methotrexate_data <- methotrexate_data[!apply(methotrexate_data, 1, function(row) any(row == "-")), ] 
+colnames(methotrexate_data) <- c("Gene", "Methotrexate Cor","Methotrexate P value")
+
+methotrexate_data <- methotrexate_data[-1,]
+
+# Find overlap
+methotrexate_data_filtered.bcr <- methotrexate_data %>%
+  filter(Gene %in% gene.list.bcr) # Results = 3
+methotrexate_data_filtered.kmt <- methotrexate_data %>%
+  filter(Gene %in% gene.list.kmt) # Results = 48
+```
+
+```{r Add important columns to new data}
+methotrexate_merged_data.bcr <- methotrexate_data_filtered.bcr %>%
+  left_join(significant_with_symbol.bcr, by = c("Gene" = "SYMBOL"))
+methotrexate_merged_data.kmt <- methotrexate_data_filtered.kmt %>%
+  left_join(significant_with_symbol.kmt, by = c("Gene" = "SYMBOL"))
+```
+
+## Cyclophosphamide
+
+```{r Filter cyclophosphamide data}
+cyclophosphamide_data <- filtered_supplementary_data
+colnames(cyclophosphamide_data)[1] <- "Gene"
+colnames(cyclophosphamide_data)[3] <- "Cyclophosphamide2"
+
+cyclophosphamide_data <- cyclophosphamide_data %>%
+  select(c("Gene","Cyclophosphamide","Cyclophosphamide2"))
+
+# Remove rows where any column contains "-"
+cyclophosphamide_data <- cyclophosphamide_data[!apply(cyclophosphamide_data, 1, function(row) any(row == "-")), ] 
+colnames(cyclophosphamide_data) <- c("Gene", "Cyclophosphamide Cor","Cyclophosphamide P value")
+
+cyclophosphamide_data <- cyclophosphamide_data[-1,]
+
+# Find overlap
+cyclophosphamide_data_filtered.bcr <- cyclophosphamide_data %>%
+  filter(Gene %in% gene.list.bcr) # Results = 5
+cyclophosphamide_data_filtered.kmt <- cyclophosphamide_data %>%
+  filter(Gene %in% gene.list.kmt) # Results = 26
+
+```
+
+```{r Add important columns to new data}
+cyclophosphamide_merged_data.bcr <- cyclophosphamide_data_filtered.bcr %>%
+  left_join(significant_with_symbol.bcr, by = c("Gene" = "SYMBOL"))
+cyclophosphamide_merged_data.kmt <- cyclophosphamide_data_filtered.kmt %>%
+  left_join(significant_with_symbol.kmt, by = c("Gene" = "SYMBOL"))
+```
+
+## Imatinib (for BCR)
+
+```{r Filter imatinib data}
+imatinib_data <- filtered_supplementary_data
+colnames(imatinib_data)[1] <- "Gene"
+colnames(imatinib_data)[15] <- "Imatinib2"
+
+imatinib_data <- imatinib_data %>%
+  select(c("Gene","Imatinib","Imatinib2"))
+
+# Remove rows where any column contains "-"
+imatinib_data <- imatinib_data[!apply(imatinib_data, 1, function(row) any(row == "-")), ] 
+colnames(imatinib_data) <- c("Gene", "Imatinib Cor","Imatinib P value")
+
+imatinib_data <- imatinib_data[-1,]
+
+# Find overlap
+imatinib_data_filtered.bcr <- imatinib_data %>%
+  filter(Gene %in% gene.list.bcr) # Result = 3
+```
+
+## Customization
+
+```{r Custom colors}
+# Create a named vector with default color ("black") and red for highlighted genes
+m_key_genes.bcr <- setNames(
+  ifelse(protein.bcr$SYMBOL %in% methotrexate_data_filtered.bcr$Gene, "red", "darkgrey"), 
+  rownames(protein.bcr)
+)
+m_key_genes.kmt <- setNames(
+  ifelse(protein.kmt$SYMBOL %in% methotrexate_data_filtered.kmt$Gene, "red", "darkgrey"), 
+  rownames(protein.kmt)
+)
+c_key_genes.bcr <- setNames(
+  ifelse(protein.bcr$SYMBOL %in% cyclophosphamide_data_filtered.bcr$Gene, "red", "darkgrey"), 
+  rownames(protein.bcr)
+)
+c_key_genes.kmt <- setNames(
+  ifelse(protein.kmt$SYMBOL %in% cyclophosphamide_data_filtered.kmt$Gene, "red", "darkgrey"), 
+  rownames(protein.kmt)
+)
+
+i_key_genes.bcr <-setNames(
+  ifelse(protein.bcr$SYMBOL %in% imatinib_data_filtered.bcr$Gene, "red","darkgrey"),
+  rownames(protein.bcr)
+)
+```
+
+
+```{r Point size}
+m_gene_size.kmt <- setNames(
+  ifelse(protein.kmt$SYMBOL %in% methotrexate_data_filtered.kmt$Gene, 5, 1.5),
+  protein.kmt$SYMBOL)
+m_gene_size.kmt <- as.numeric(m_gene_size.kmt)
+
+m_gene_size.bcr <- setNames(
+  ifelse(protein.bcr$SYMBOL %in% methotrexate_data_filtered.bcr$Gene, 5, 1.5),
+  protein.bcr$SYMBOL)
+m_gene_size.bcr <- as.numeric(m_gene_size.bcr)
+
+c_gene_size.kmt <- setNames(
+  ifelse(protein.kmt$SYMBOL %in% cyclophosphamide_data_filtered.kmt$Gene, 5, 1.5),
+  protein.kmt$SYMBOL)
+c_gene_size.kmt <- as.numeric(c_gene_size.kmt)
+
+c_gene_size.bcr <- setNames(
+  ifelse(protein.bcr$SYMBOL %in% cyclophosphamide_data_filtered.bcr$Gene, 5, 1.5),
+  protein.bcr$SYMBOL)
+c_gene_size.bcr <- as.numeric(c_gene_size.bcr)
+
+i_gene_size.bcr <- setNames(
+  ifelse(protein.bcr$SYMBOL %in% imatinib_data_filtered.bcr$Gene, 5,1.5),
+  protein.bcr$SYMBOL)
+i_gene_size.bcr <- as.numeric(i_gene_size.bcr)
+
+```
+
+## Volcano Plots
+
+```{r Methotrexate}
+pdf("/misc/pichu/data/lara/figures/EVolcano_Methotrexate_BCR.pdf", width = 13, height = 11)
+EnhancedVolcano(protein.bcr,
+    lab = protein.bcr$SYMBOL,
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'BCR vs Relapsed BCR with Highlighted Methotrexate-Related Genes',
+    titleLabSize = 24,
+    labSize = 9,
+    colCustom = m_key_genes.bcr,
+    pointSize = m_gene_size.bcr,
+    legendPosition = "none",
+    selectLab = methotrexate_data_filtered.bcr$Gene,
+    widthConnectors = 0.3,
+    max.overlaps = Inf,
+    drawConnectors = TRUE,
+    pCutoff = 0.1,   # damit y-Achsen-Linie zu deinem Filter passt
+    FCcutoff = 1 )
+dev.off()
+
+pdf("/misc/pichu/data/lara/figures/EVolcano_Methotrexate_KMT.pdf", width = 13, height = 11)
+EnhancedVolcano(protein.kmt,
+    lab = protein.kmt$SYMBOL,
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'KMT vs Relapsed KMT with Highlighted Methotrexate-Related Genes',
+    titleLabSize = 24,
+    labSize = 9,
+    # labCol = m_label_colors.kmt,
+    colCustom = m_key_genes.kmt,
+    pointSize = m_gene_size.kmt,
+    legendPosition = "none",
+    selectLab = methotrexate_data_filtered.kmt$Gene,
+    widthConnectors = 0.3,
+    max.overlaps = Inf,
+    drawConnectors = TRUE,
+    pCutoff = 0.1,   # damit y-Achsen-Linie zu deinem Filter passt
+    FCcutoff = 1 )
+dev.off()
+```
+
+```{r Cyclophosphamide}
+pdf("/misc/pichu/data/lara/figures/EVolcano_Cyclophosphamide_BCR.pdf", width = 13, height = 11)
+EnhancedVolcano(protein.bcr,
+    lab = protein.bcr$SYMBOL,
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'BCR vs Relapsed BCR with Highlighted Cyclophosphamide-Related Genes',
+    titleLabSize = 24,
+    labSize = 9,
+    colCustom = c_key_genes.bcr,
+    pointSize = c_gene_size.bcr,
+    legendPosition = "none",
+    selectLab = cyclophosphamide_data_filtered.bcr$Gene,
+    widthConnectors = 0.3,
+    max.overlaps = Inf,
+    drawConnectors = TRUE,
+    pCutoff = 0.1,   # damit y-Achsen-Linie zu deinem Filter passt
+    FCcutoff = 1,
+    ylim = c(0, 11)
+)
+dev.off()
+
+pdf("/misc/pichu/data/lara/figures/EVolcano_Cyclophosphamide_KMT.pdf", width = 13, height = 11)
+EnhancedVolcano(protein.kmt,
+    lab = protein.kmt$SYMBOL,
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'KMT vs Relapsed KMT with Highlighted Cyclophosphamide-Related Genes',
+    titleLabSize = 24,
+    labSize = 9,
+    colCustom = c_key_genes.kmt,
+    pointSize = c_gene_size.kmt,
+    legendPosition = "none",
+    selectLab = cyclophosphamide_data_filtered.kmt$Gene,
+    widthConnectors = 0.3,
+    max.overlaps = Inf,
+    drawConnectors = TRUE,
+    pCutoff = 0.1,   # damit y-Achsen-Linie zu deinem Filter passt
+    FCcutoff = 1 )
+dev.off()
+```
+
+```{r Imatinib}
+pdf("/misc/pichu/data/lara/figures/EVolcano_Imatinib_BCR.pdf", width = 13, height = 11)
+EnhancedVolcano(protein.bcr,
+    lab = protein.bcr$SYMBOL,
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'BCR vs. Relapsed BCR with Highlighted Imatinib-Related Genes',
+    titleLabSize = 24,
+    labSize = 10,
+    colCustom = i_key_genes.bcr,
+    pointSize = i_gene_size.bcr,
+    legendPosition = "none",
+    selectLab = imatinib_data_filtered.bcr$Gene,
+    widthConnectors = 0.3,
+    max.overlaps = Inf,
+    drawConnectors = TRUE,
+    pCutoff = 0.1,   # damit y-Achsen-Linie zu deinem Filter passt
+    FCcutoff = 1,
+    ylim = c(0, 11)
+   )
+dev.off()
+
+```
+
+## Fisher Test for Treatment and BCR/KMT
+
+```{r Fisher}
+
+overlap_between_suppl_and_protein_DE_genes.bcr <- intersect(supplementary_with_ensembl.data$ENSEMBL, rownames(protein.bcr)) 
+overlap_between_suppl_and_protein_DE_genes.kmt <- intersect(supplementary_with_ensembl.data$ENSEMBL, rownames(protein.kmt)) 
+
+#get schnittmenge
+protein_bcr_overlap <- protein.bcr[rownames(protein.bcr) %in% overlap_between_suppl_and_protein_DE_genes.bcr, ]
+protein_bcr_overlap_clean <- na.omit(protein_bcr_overlap) #5217 in total for BCR
+
+protein_kmt_overlap <- protein.kmt[rownames(protein.kmt) %in% overlap_between_suppl_and_protein_DE_genes.kmt, ]
+protein_kmt_overlap_clean <- na.omit(protein_kmt_overlap) #5109 in total for KMT
+
+#get all DEs: padj < 0.1
+DE_protein_bcr_overlap <- protein_bcr_overlap_clean %>%
+  dplyr::filter(padj < 0.1) #15: DEs in total for BCR
+
+DE_protein_kmt_overlap <- protein_kmt_overlap_clean %>%
+  dplyr::filter(padj < 0.1) #220: DEs in total for KMT
+
+#imatinib
+imatinib_protein_genes_overlap <- protein_bcr_overlap_clean[rownames(protein_bcr_overlap_clean) %in% imatinib_cor_data$ENSEMBL, ] #338: Cor
+imatinib_treatment_overlap <- imatinib_cor_data[imatinib_cor_data$ENSEMBL %in% rownames(protein_bcr_overlap_clean), ]#338
+
+imatinib_de_and_cor <- intersect(rownames(imatinib_protein_genes_overlap), rownames(DE_protein_bcr_overlap))
+length(imatinib_de_and_cor) #3: DE and Cor
+
+#methotrexate
+metho_protein_genes_overlap.bcr <- protein_bcr_overlap_clean[rownames(protein_bcr_overlap_clean) %in% methotrexate_cor_data$ENSEMBL, ] #939: Cor
+metho_de_and_cor.bcr <- intersect(rownames(metho_protein_genes_overlap.bcr), rownames(DE_protein_kmt_overlap)) #2: DE and Cor
+
+metho_protein_genes_overlap.kmt <- protein_kmt_overlap_clean[rownames(protein_kmt_overlap_clean) %in% methotrexate_cor_data$ENSEMBL, ] #912: Cor
+metho_de_and_cor.kmt <- intersect(rownames(metho_protein_genes_overlap.kmt), rownames(DE_protein_kmt_overlap)) #46: DE and Cor
+length(metho_de_and_cor.kmt)
+
+#cyclophosphamide
+cyclo_protein_genes_overlap.bcr <- protein_bcr_overlap_clean[rownames(protein_bcr_overlap_clean) %in% cyclophosphamide_cor_data$ENSEMBL, ] #421: Cor
+cyclo_de_and_cor.bcr <- intersect(rownames(cyclo_protein_genes_overlap.bcr), rownames(DE_protein_bcr_overlap)) #4: DE and Cor
+
+cyclo_protein_genes_overlap.kmt <- protein_kmt_overlap_clean[rownames(protein_kmt_overlap_clean) %in% cyclophosphamide_cor_data$ENSEMBL, ] #413: Cor
+cyclo_de_and_cor.kmt <- intersect(rownames(cyclo_protein_genes_overlap.kmt), rownames(DE_protein_kmt_overlap)) #23: DE and Cor
+length(cyclo_de_and_cor.kmt )
+
+
+
+imatinib_fisher_table.bcr <- matrix(c(3, 12, 335, 4867), nrow = 2, byrow = TRUE)
+rownames(imatinib_fisher_table.bcr) <- c("DE", "not DE")
+colnames(imatinib_fisher_table.bcr) <- c("with Cor", "without Cor")
+
+methotrexate_fisher_table.bcr <- matrix(c(2, 13, 937, 4265), nrow = 2, byrow = TRUE)
+rownames(methotrexate_fisher_table.bcr) <- c("DE", "not DE")
+colnames(methotrexate_fisher_table.bcr) <- c("with Cor", "without Cor")
+
+methotrexate_fisher_table.kmt <- matrix(c(46, 174, 866, 4023), nrow = 2, byrow = TRUE)
+rownames(methotrexate_fisher_table.kmt) <- c("DE", "not DE")
+colnames(methotrexate_fisher_table.kmt) <- c("with Cor", "without Cor")
+
+cyclophosphamide_fisher_table.bcr <- matrix(c(4, 11, 417, 4785), nrow = 2, byrow = TRUE)
+rownames(cyclophosphamide_fisher_table.bcr) <- c("DE", "not DE")
+colnames(cyclophosphamide_fisher_table.bcr) <- c("with Cor", "without Cor")
+
+cyclophosphamide_fisher_table.kmt <- matrix(c(23, 197, 390, 4499), nrow = 2, byrow = TRUE)
+rownames(cyclophosphamide_fisher_table.kmt) <- c("DE", "not DE")
+colnames(cyclophosphamide_fisher_table.kmt) <- c("with Cor", "without Cor")
+
+#Results
+methotrexate_fisher_result.bcr <- fisher.test(methotrexate_fisher_table.bcr) # p-value = 1
+methotrexate_fisher_result.kmt <- fisher.test(methotrexate_fisher_table.kmt) # p-value = 0.2415
+
+cyclophosphamide_fisher_result.bcr <- fisher.test(cyclophosphamide_fisher_table.bcr) # p-value = 0.0279
+cyclophosphamide_fisher_result.kmt <- fisher.test(cyclophosphamide_fisher_table.kmt) # p-value = 0.2044
+
+imatinib_fisher_result.bcr <- fisher.test(imatinib_fisher_table.bcr) #p-value = 0.06861
+
+```
+

@@ -1,0 +1,154 @@
+---
+title: "PCA for Expression"
+output: html_document
+---
+```{r setup, include=FALSE}
+library(ggpubr)
+library(ensembldb)
+library("EnsDb.Hsapiens.v86")
+library(dplyr)
+
+```
+
+```{r Read-in data}
+vsd <- readRDS("/misc/paras/data/www/ALL/data/processed/Jan21/ANALYSIS/RNA_seq/counts.all.genes.vsd.rds")
+
+all.meta <- readRDS("/misc/pichu/data/lara/objects/meta_data_with_relapsed.rds")
+
+all.counts <- readRDS("/misc/pichu/data/lara/objects/all_read_counts.rds") %>%
+  column_to_rownames(var = names(.)[1])
+
+all_counts_with_id <- readRDS("/misc/pichu/data/lara/objects/all_read_counts.rds")
+
+rna.dir <- "/misc/paras/data/www/ALL/data/processed/Jan21/RNAseq/counted/segemehl"
+
+edb <- EnsDb.Hsapiens.v86
+protein.coding <- genes(edb, filter=GeneBiotypeFilter("protein_coding"))
+protein.coding.id <- mcols(protein.coding)$gene_id
+```
+
+```{r Variance Transformed}
+vst.counts <- as.data.frame(assay(vsd)) %>%
+  rownames_to_column("id")
+```
+
+## PCA - Protein Coding Genes
+
+```{r Only protein coding genes}
+protein.counts <- as.data.frame(vst.counts) %>%
+  dplyr::filter(id %in% protein.coding.id)
+
+protein_counts_with_sd <- protein.counts %>%
+              rowwise() %>% 
+              dplyr::mutate(gene.sd = sd(across(where(is.numeric)),na.rm=T)) 
+
+# Here are 13.226 Genes
+protein_counts.pca <- protein_counts_with_sd %>%
+              dplyr::filter(gene.sd > 0.5 ) %>% # standard deviation
+              dplyr::select(-gene.sd) %>%
+              column_to_rownames("id")
+
+protein_pca.res <- prcomp(t(protein_counts.pca), center = TRUE, scale = TRUE)
+
+pal.cat <- c("#E7AC92","#706EA1","#E7D392","#629C86","#B4729B","#627D96","#CEDE8C","#263056","#FF7061")
+names(pal.cat) <- c("BCR","CML", "HPR","HYP", "KMT","NUT","TCF","TEL","DNMT3B")
+
+percentVar <- round(100*protein_pca.res$sdev^2 / sum(protein_pca.res$sdev^2),1)
+
+## assign the meta data to the PCA coordinates
+gc.pca.df <- data.frame(pca.res$x) %>%
+  rownames_to_column("ID") %>%
+  left_join(meta, by=c("ID"="sample")) %>%
+  mutate(Age_class = factor(Age_class, levels = c("I","C","T","A")))
+
+ggplot(gc.pca.df, aes(x=PC1,y=PC2,color=Hall_class,shape=Age_class))+
+  geom_point(alpha=0.7,size=5)+
+  scale_color_manual(values=pal.cat)+
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  geom_text_repel(aes(label = Case_no),
+                  size = 3) +
+  labs(title = "PCA based on protein coding genes, class and age group",
+       subtitle = paste0("n =",nrow(protein_counts.pca))) +
+  theme_classic()
+ggsave("/misc/pichu/data/lara/figures/PCA_without_relapsed.pdf",width=7, height=5)
+```
+
+## PCA - With Added Relapsed Genes
+
+## With Projection
+
+```{r}
+#Get counts
+relapsed.counts <- all_counts_with_id %>%
+  column_to_rownames("id") %>%
+  dplyr::select(c("BCR_4.C_relapsed", "BCR_13.T_relapsed", "KMT_2.I_relapsed", "KMT_4.I_relapsed"))
+
+relapsed.counts[1, ] <- 0
+  
+#Meta Data
+relapsed.meta <- all.meta %>%
+  dplyr::filter(grepl("_relapsed", rownames(.)))
+
+
+dds.relapsed <- DESeqDataSetFromMatrix(countData = relapsed.counts,
+                              colData = relapsed.meta,
+                              design = ~ condition)
+
+vsd.relapsed <- vst(dds.relapsed)
+
+relapsed.counts = as.data.frame(assay(vsd.relapsed)) %>%
+  rownames_to_column("id") %>%
+  #dplyr::select(id, contains("relapsed")) %>%
+  dplyr::filter(id %in% protein.coding.id)
+
+#Get rownames
+rownames_from_protein_counts <- rownames(protein_counts.pca)
+
+#Basically get the rownames from the first PCA (without relapsed) after the SD filter
+relapsed_counts_filtered.pca <- relapsed.counts %>%
+  dplyr::filter(id %in% rownames_from_protein_counts)
+
+
+pca_res.df <- as.data.frame(protein_pca.res$rotation)
+genes_pca_res <- rownames(pca_res.df)
+
+#Check
+relapsed_counts_filtered.pca <- relapsed_counts_filtered.pca %>% 
+  column_to_rownames("id")
+
+#Projection
+predicted_pca.res <- predict(protein_pca.res, newdata = t(relapsed_counts_filtered.pca))
+```
+
+```{r Plot with Relapse}
+
+predicted_pca.df <- data.frame(predicted_pca.res) %>%
+  rownames_to_column("ID") %>%
+  left_join(relapsed.meta, by=c("ID"="sample"))
+
+combined_pca.df <- bind_rows(gc.pca.df, predicted_pca.df) %>%
+  mutate(Relapsed= ifelse(grepl("relapse",ID_Jena), TRUE,FALSE)) %>%
+  mutate(Age_rel = ifelse(Relapsed==1, "R", Age_class)) %>% # left_join(meta.re, by = c("ID" = "sample"))
+  mutate(Age_rel = factor(Age_rel, levels = c("I","C","T","A","R")))
+
+ggplot(combined_pca.df, aes(x=PC1,y=PC2,shape=Age_rel,color=Hall_class,)) +
+    guides(
+      shape = guide_legend(order = 1),
+      color = guide_legend(order = 2)
+    ) +
+   geom_point(alpha = 0.7, size = 5) +
+   scale_color_manual(values=pal.cat)+
+   xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+   ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+   geom_text_repel(aes(label = Case_no),
+                   size = 3) +
+   labs(title = "PCA based on protein coding genes, class and age group + relapse samples",
+        subtitle = paste0("n =",nrow(relapsed_counts_filtered.pca))) +
+   theme_classic()
+
+ggsave("/misc/pichu/data/lara/figures/PCA_relapsed_predicted.pdf",width=7, height=5)
+
+
+```
+

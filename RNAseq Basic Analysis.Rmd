@@ -1,0 +1,316 @@
+---
+title: "RNAseq basic analysis"
+author: "Alena van Bömmel & lara"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+---
+---
+<style>
+    body .main-container {
+        max-width: 1250px;
+    }
+</style>
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(GenomicRanges)
+#library(vsn)
+library(DESeq2)
+library(apeglm)
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(tibble)
+library(ComplexHeatmap)
+library(dplyr)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ensembldb)
+library(EnhancedVolcano)
+library(ReactomePA)
+library("EnsDb.Hsapiens.v86")
+
+```
+
+
+## Read in data
+
+```{r data}
+edb <- EnsDb.Hsapiens.v86
+# without relapse samples and TKMT
+meta <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/ANALYSIS/MOFA/metadata.all.latest.dat") %>%
+  dplyr::filter(Hall_class!="TKMT") %>%
+  dplyr::filter(!grepl("relapsed",sample)) %>%
+  dplyr::filter(!sample %in% c("NUT_1.T")) # with new BCR samples
+
+rna.dir <- "/misc/paras/data/www/ALL/data/processed/Jan21/RNAseq/counted/segemehl"
+
+# Variance Stabilizing Transformation
+vsd <- readRDS("/misc/paras/data/www/ALL/data/processed/Jan21/ANALYSIS/RNA_seq/counts.all.genes.vsd.rds")
+vst.counts = as.data.frame(assay(vsd)) %>%
+  rownames_to_column("id")
+
+# genes
+all.genes.gr <- readRDS("/home/lakatos/aboemmel/genomes/GRCh38/all.genes.ensembl.102.chrsizes.granges.rds")
+all.promoters.gr <- promoters(all.genes.gr, upstream = 2000, downstream = 500)
+
+# save only gene id and name
+gene.ids <- as.data.frame(all.genes.gr) %>%
+  dplyr::select(ensembl_gene_id, external_gene_name) %>%
+  distinct()
+
+## get protein coding genes
+  
+protein.coding <- genes(edb, filter=GeneBiotypeFilter("protein_coding"))
+protein.coding.id <- mcols(protein.coding)$gene_id
+
+meta.re[startsWith(rownames(meta.re), c("BCR_4","BCR_13","KMT_2.","KMT_4.")),]
+
+meta_from_subtypes_with_relapsed <- meta.re[c("BCR_4.C","BCR_4.C_relapsed","BCR_13.T","BCR_13.T_relapsed","KMT_2.I","KMT_2.I_relapsed","KMT_4.I","KMT_4.I_relapsed"),]
+
+saveRDS(meta_from_subtypes_with_relapsed, "/misc/pichu/data/lara/objects/meta_from_subtypes_with_relapsed.rds")
+```
+
+## Raw unnormalised counts
+
+```{r unnormalised counts}
+
+# get columns without relapsed samples 
+meta.all <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/ANALYSIS/MOFA/metadata.all.latest.dat") %>%
+    dplyr::filter(!grepl("relapsed",sample)) %>%
+    dplyr::arrange(Hall_class, Case_no) %>%
+    dplyr::filter(Hall_class!="TKMT") 
+
+rna.dir <- "/misc/paras/data/www/ALL/data/processed/Jan21/RNAseq/counted/segemehl"
+## RNAseq raw counts for all genes, colnames must be renamed
+counts <- read.delim(file.path(rna.dir,"experiments.htsc")) 
+colnames(counts)[-1] <- meta.all$sample
+
+# now select only the relevant samples
+counts <- counts %>%
+  dplyr::select(id, any_of(meta$sample)) %>%
+  column_to_rownames("id")
+
+# now read the relapsed read counts (BCR4, BCR13, KMT2, KMT4) and add them to the counts table (left_join by the gene id)
+
+read.counts <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/RNAseq/counted/segemehl/experiments.htsc.jena_id") %>% dplyr::select(-starts_with("TKMT"),-starts_with("NUT"),-experiments.htsc)
+relapse.bcr4 <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/RNAseq/counted/segemehl/BCR_4-C_relapsed.genecounts.htsc")
+relapse.bcr13 <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/RNAseq/counted/segemehl/BCR_13-T_relapsed.genecounts.htsc")
+relapse.kmt2 <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/RNAseq/counted/segemehl/KMT_2-I_relapsed.genecounts.htsc")
+relapse.kmt4 <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/RNAseq/counted/segemehl/KMT_4-I_relapsed.genecounts.htsc")
+
+colnames(relapse.bcr13) = c("id", "BCR_13.T_relapsed")
+colnames(relapse.bcr4) = c("id", "BCR_4.C_relapsed")
+colnames(relapse.kmt2) = c("id", "KMT_2.I_relapsed")
+colnames(relapse.kmt4) = c("id", "KMT_4.I_relapsed")
+
+read.counts <- read.counts %>%
+  left_join(relapse.bcr4, by = "id") %>%
+  left_join(relapse.bcr13, by = "id") %>%
+  left_join(relapse.kmt4, by = "id") %>%
+  left_join(relapse.kmt2, by = "id")
+
+
+# now sort the read counts table
+
+columns <- colnames(read.counts)
+
+sorted_columns <- columns[order(
+  str_extract(columns, "^[A-Za-z_]+"),
+  as.numeric(str_extract(columns, "(?<=_)\\d+"))  
+)]
+
+read.counts <- read.counts[, sorted_columns]
+
+read.counts <- read.counts %>%
+  dplyr::select(id, everything())
+
+saveRDS(read.counts, "/misc/pichu/data/lara/objects/all_read_counts.rds")
+
+```
+
+## Meta data including Relapsed Samples 
+
+```{r project use meta-data with relapsed samples}
+# get metadata with relapsed samples
+
+meta.re <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/ANALYSIS/MOFA/metadata.all.latest.dat") %>%
+    dplyr::arrange(Hall_class, Case_no) 
+
+# filter metadata
+
+rownames(meta.re) <- meta.re$sample
+meta.re <- meta.re[rownames(meta.re) != "DNMT3B_3.C_relapsed", ]
+meta.re <- meta.re[rownames(meta.re) != "NUT_1.T", ]
+meta.re <- meta.re[!grepl("^TKMT", rownames(meta.re)), ]
+
+saveRDS(meta.re, "/misc/pichu/data/lara/objects/meta_data_with_relapsed.rds")
+# filter read counts 
+
+read.counts <- read.counts %>%
+  dplyr::select(-1)
+read.counts <- read.counts[-1, ] # delete NA values
+rownames(read.counts) <- seq_len(nrow(read.counts))
+
+
+# now check
+
+all(colnames(read.counts) %in% rownames(meta.re))
+all(colnames(read.counts) == rownames(meta.re))
+```
+
+```{r project DDS object}
+
+# create a DDS object (DESeq2)
+
+meta.re$condition <- as.factor(meta.re$condition)
+
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(countData = read.counts,
+                              colData = meta.re,
+                              design = ~ condition)
+```
+
+## Calculate VSTs
+
+```{r project variance stabilised counts}
+
+vsd2 <- vst(dds) # with additional relapsed samples
+
+```
+
+## Create DDS object
+
+```{r project differential gene expression with Deseq2}
+
+# get KMT and BCR read counts in different tables
+read.counts2 <- read.delim("/misc/paras/data/www/ALL/data/processed/Jan21/RNAseq/counted/segemehl/experiments.htsc.jena_id")
+
+counts.bcr413 <- read.counts2 %>% dplyr::select(id,BCR_4.C,BCR_13.T)
+counts.kmt24 <- read.counts2 %>% dplyr::select(id,KMT_2.I,KMT_4.I)
+
+counts.bcr.re <- full_join(relapse.bcr4, relapse.bcr13, by = "id") 
+counts.kmt.re <- full_join(relapse.kmt2, relapse.kmt4, by = "id") 
+
+counts.bcr <- counts.bcr.re %>% left_join(counts.bcr413, by = c("id"))
+counts.kmt <- counts.kmt.re %>% left_join(counts.kmt24, by = c("id"))
+
+# create metadata for BCR and KMT samples, and insert column "Relapsed"
+meta.bcr <- meta.re[rownames(meta.re) %in% c("BCR_4.C","BCR_4.C_relapsed","BCR_13.T","BCR_13.T_relapsed"), ] %>%
+  mutate(Relapsed = as.factor(ifelse(grepl("relapse", ID_Jena), "relapsed", "diagnosis")))
+meta.kmt <- meta.re[rownames(meta.re) %in% c("KMT_2.I","KMT_2.I_relapsed","KMT_4.I", "KMT_4.I_relapsed"), ] %>%
+  mutate(Relapsed = as.factor(ifelse(grepl("relapse", ID_Jena), "relapsed", "diagnosis")))
+
+
+# sort counts
+sorted_columns_bcr <- rownames(meta.bcr)
+sorted_columns_kmt <- rownames(meta.kmt)
+
+counts.bcr <- counts.bcr[,c("id",sorted_columns_bcr)]
+counts.kmt <- counts.kmt[,c("id",sorted_columns_kmt)]
+
+# delete id column
+rownames(counts.bcr) <- counts.bcr$id 
+counts.bcr <- counts.bcr %>%
+  dplyr::select(-id)
+
+rownames(counts.kmt) <- counts.kmt$id
+counts.kmt <- counts.kmt %>%
+  dplyr::select(-id)
+
+
+# check
+all(colnames(counts.bcr) %in% rownames(meta.bcr))
+all(colnames(counts.bcr) == rownames(meta.bcr))
+all(colnames(counts.kmt) %in% rownames(meta.kmt))
+all(colnames(counts.kmt) == rownames(meta.kmt))
+
+# create dds objects
+dds.bcr <- DESeqDataSetFromMatrix(countData = counts.bcr,
+                              colData = meta.bcr,
+                              design = ~ Relapsed)
+dds.kmt <- DESeqDataSetFromMatrix(countData = counts.kmt,
+                              colData = meta.kmt,
+                              design = ~ Relapsed)
+
+```
+
+## Prefiltering low counts
+
+```{r project Prefiltering low count genes}
+#Prefiltering low count genes (reduction of memory size)----
+smallestGroupSize <- 2
+keep <- rowSums(counts(dds.bcr) >= 10) >= smallestGroupSize
+dds.bcr <- dds.bcr[keep,]
+
+smallestGroupSize <- 2
+keep <- rowSums(counts(dds.kmt) >= 10) >= smallestGroupSize
+dds.kmt <- dds.kmt[keep,]
+
+
+# DeSeq2
+dds.bcr2 <- DESeq(dds.bcr)
+dds.kmt2 <- DESeq(dds.kmt)
+
+# Save Results
+saveRDS(dds.bcr2, "/misc/pichu/data/lara/objects/dds/dds.bcr.rds")
+saveRDS(dds.kmt2, "/misc/pichu/data/lara/objects/dds/dds.kmt.rds")
+
+res.bcr <- results(dds.bcr2)
+res.kmt <- results(dds.kmt2)
+
+```
+
+# Filtering padj and log2foldchange
+
+```{r project filtering}
+
+# order p-values
+
+resOrdered.bcr <- res.bcr[order(res.bcr$pvalue),]
+resOrdered.kmt <- res.kmt[order(res.kmt$pvalue),]
+
+# Into Dataframe
+
+resOrdered.bcr <- as.data.frame(resOrdered.bcr)
+resOrdered.kmt <- as.data.frame(resOrdered.kmt)
+
+# Filter ordered resLFCs for padj
+
+padj.bcr <- resOrdered.bcr %>%
+  dplyr::filter(padj < 0.1) 
+padj.kmt <- resOrdered.kmt %>%
+  dplyr::filter(padj < 0.1)
+
+saveRDS(padj.bcr, file = "/misc/pichu/data/lara/objects/significantGenes_bcr.rds")
+saveRDS(padj.kmt, file = "/misc/pichu/data/lara/objects/significantGenes_kmt.rds")
+
+# Filter ordered resLFCs for log2foldchange
+
+poslog.bcr <- padj.bcr %>%
+  dplyr::filter(log2FoldChange > 0)
+poslog.kmt <- padj.kmt %>%
+  dplyr::filter(log2FoldChange > 0)
+
+neglog.bcr <- padj.bcr %>%
+  dplyr::filter(log2FoldChange < 0)
+neglog.kmt <- padj.kmt %>%
+  dplyr::filter(log2FoldChange < 0)
+
+saveRDS(poslog.bcr, file = "/misc/pichu/data/lara/objects/upregulatedGenes_bcr.rds")
+saveRDS(poslog.kmt, file = "/misc/pichu/data/lara/objects/upregulatedGenes_kmt.rds")
+saveRDS(neglog.bcr, file = "/misc/pichu/data/lara/objects/downregulatedGenes_bcr.rds")
+saveRDS(neglog.kmt, file = "/misc/pichu/data/lara/objects/downregulatedGenes_kmt.rds")
+```
+
+
+
+
