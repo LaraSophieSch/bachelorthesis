@@ -1,7 +1,7 @@
 # Bachelorthesis - Epigenetic and transcriptional changes in relapsed pediatric Acute Lymphoblastic Leukemia
 This repository contains a comprehensive R-based workflow for the analysis of RNA-Seq and WGBS methylation data, focusing on the comparison between diagnosis and relapse in patient samples. The project integrates differential expression analysis, PCA, enrichment analysis, and analysis of treatment-associated genes.
 
-# Contens:
+# Contents:
 The analysis is organized into the following R Markdown files:
 
 1. RNAseq Basic Analysis.Rmd:
