@@ -53,7 +53,9 @@ install.packages(c("ggplot2", "EnhancedVolcano", "pheatmap", "ComplexHeatmap", "
 </pre>
 
 # License
-This project is intended for academic and non-commercial use only. Please do not use this code.
+This project is part of a bachelor's thesis and is intended for academic and illustrative purposes only. The provided code is not designed for production use but rather for inspection and understanding. Commercial use is not permitted.
+
+If any part of the content or code is used in your own work, please give appropriate credit.
 
 
 
