@@ -42,3 +42,18 @@ Key R packages used in this project:
 - GenomicRanges, rtracklayer
 
 - tidyverse, dplyr, tibble
+
+Make sure to install the required Bioconductor and CRAN packages before running the scripts.
+<pre>
+  if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(c("DESeq2", "clusterProfiler", "org.Hs.eg.db", "GenomicRanges", "rtracklayer"))
+install.packages(c("ggplot2", "EnhancedVolcano", "pheatmap", "ComplexHeatmap", "tidyverse"))
+</pre>
+
+# License
+This project is intended for academic and non-commercial use only. Please do not use this code.
+
+
+
